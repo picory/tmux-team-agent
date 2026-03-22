@@ -947,6 +947,8 @@ def setup(repo_root: Path, project_dir: Path) -> None:
     mapping = {
         repo_root / "runtime" / "bin" / "ai-start": rt_home / "bin" / "ai-start",
         repo_root / "runtime" / "bin" / "ai-init": rt_home / "bin" / "ai-init",
+        repo_root / "runtime" / "bin" / "teamstart": rt_home / "bin" / "teamstart",
+        repo_root / "runtime" / "bin" / "teaminit": rt_home / "bin" / "teaminit",
         repo_root / "runtime" / "scripts" / "spawn.sh": rt_home / "scripts" / "spawn.sh",
         repo_root / "runtime" / "scripts" / "kill.sh": rt_home / "scripts" / "kill.sh",
         repo_root / "runtime" / "scripts" / "watcher.sh": rt_home / "scripts" / "watcher.sh",
@@ -968,7 +970,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     local_bin = Path.home() / ".local" / "bin"
     ensure_dir(local_bin)
-    for name in ["ai-start", "ai-init"]:
+    for name in ["ai-start", "ai-init", "teamstart", "teaminit"]:
         link = local_bin / name
         target = rt_home / "bin" / name
         if link.exists() or link.is_symlink():

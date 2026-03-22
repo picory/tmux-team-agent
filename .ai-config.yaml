@@ -1,4 +1,4 @@
-project: cmux-multi-agent
+project: tmux-multi-agent
 
 agents:
   - name: leader
