@@ -4,29 +4,197 @@
 
 Multi-agent development orchestration with Claude Code + cmux.
 
-`ai-start` installs or refreshes the shared runtime in `~/.ai-runtime`, initializes the current project, and starts a multi-agent mux session with a `leader` window and a `watcher` window.
+## Why cmux-multi-agent?
 
-## What this repository provides
+Claude Code can already coordinate work, but visible multi-agent execution is still useful when you want:
 
-- Shared runtime installer
-- Project scaffolding for `.ai-config.yaml` and `.ai-agents/*.md`
-- Interactive `leader` loop for submitting work
-- `watcher` loop that reads queued tasks and auto-spawns agent windows
-- `spawn.sh` and `kill.sh` wrappers for runtime control
-- CommentMate-style specialist roles for backend, frontend, desktop, crawler, QA, docs, and review
-- Rich task records with policy, followups, artifacts, and result metadata
+- role-based parallel work instead of one long opaque session
+- a persistent `leader` and `watcher` control plane
+- project-local agent prompts and policy
+- auto-scaling worker windows based on queued work
+- a repeatable runtime you can drop into multiple repositories
 
-## First run
+`cmux-multi-agent` puts a runtime layer on top of `cmux` or `tmux` so that agent orchestration becomes a project capability, not a one-off terminal trick.
+
+## Overview
+
+This repository provides two layers:
+
+- Shared runtime in `~/.ai-runtime`
+  - installed once
+  - contains the reusable launcher, watcher, prompts, and helper scripts
+- Project-local configuration
+  - created inside each target repository
+  - defines agent roles, prompts, tasks, outputs, and state
+
+Once installed, the expected workflow is:
 
 ```bash
-cd /path/to/project
-/path/to/this/repo/setup.sh
+cd /path/to/your-project
 ai-start
 ```
 
-`setup.sh` installs or refreshes the shared runtime and initializes the current project if it has not been configured yet.
+`ai-start` ensures project scaffolding exists, starts a mux session, opens `leader` and `watcher`, and lets the watcher spawn specialist workers as tasks appear.
+
+## Why use it?
+
+Use this when you want a local multi-agent development runtime with explicit orchestration.
+
+- You want specialist roles such as `backend-coder`, `frontend-coder`, `desktop-coder`, `crawler-coder`, `reviewer`, `qa`, and `docs-writer`.
+- You want to watch parallel work happen in visible panes instead of waiting for one final summary.
+- You want project prompts and role rules to live in versioned files.
+- You want task state, artifacts, and follow-up actions like review and QA to be persisted locally.
+- You want one runtime that can be reused across many repositories.
+
+## Prerequisites
+
+You need the following installed on the machine:
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- `cmux` or `tmux`
+  - `cmux` is preferred
+  - `tmux` is used automatically as a fallback
+- `python3`
+- `bash`
+
+Recommended:
+
+- a configured `.claude/` directory in the target project or home directory
+- `~/.local/bin` available in your `PATH`
+
+Current platform support:
+
+- macOS: supported
+- Linux: expected to work with the same shell and mux assumptions
+- Windows: not yet supported as a first-class runtime target
+
+## Installation
+
+Clone this repository and run setup once:
+
+```bash
+git clone https://github.com/picory/cmux-multi-agent.git
+cd cmux-multi-agent
+./setup.sh
+```
+
+What `setup.sh` does:
+
+- installs or refreshes the shared runtime in `~/.ai-runtime`
+- links `ai-start` and `ai-init` into `~/.local/bin`
+- initializes the current repository with default `.ai-*` scaffolding if it does not already exist
+
+If `ai-start` is not found after setup, add this to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## Usage
+
+### 1. Start a project runtime
+
+Move into the repository where you want multi-agent execution and run:
+
+```bash
+cd /path/to/your-project
+ai-start
+```
+
+This will:
+
+1. create `.ai-config.yaml` if missing
+2. create `.ai-agents/` role prompt files if missing
+3. create `tasks/`, `outputs/`, and `.ai-state/`
+4. open a mux session with `leader` and `watcher`
+
+### 2. Submit work from the leader window
+
+The leader accepts natural language input and routes it to specialist roles.
+
+Examples:
+
+```text
+React layout 정리
+```
+
+```text
+Tauri 창 제어 버그 수정
+```
+
+```text
+watcher polling 개선
+```
+
+You can also target roles explicitly:
+
+```text
+/spawn backend-coder API 인증 흐름 정리
+/review 회귀 위험 점검
+/qa watcher 동작 검증
+/docs README 설치 문서 보강
+/status
+```
+
+### 3. Watch execution
+
+The watcher reads queued tasks, scales up matching worker roles, and closes idle worker windows after the configured TTL.
+
+Defaults:
+
+- `AI_WATCH_INTERVAL=5`
+- `AI_IDLE_TTL_SECONDS=120`
+
+## Runtime model
+
+### Control roles
+
+- `leader`
+  - accepts work
+  - routes tasks
+  - acts as the orchestration entry point
+- `watcher`
+  - monitors task queue and agent pool
+  - scales workers up and down
+
+### Specialist roles
+
+- `backend-coder`
+- `frontend-coder`
+- `desktop-coder`
+- `crawler-coder`
+- `reviewer`
+- `qa`
+- `docs-writer`
+
+### Task lifecycle
+
+Tasks are stored in `tasks/tasks.json` and include metadata such as:
+
+- role
+- status
+- priority
+- scope
+- dependencies
+- follow-ups
+- artifacts
+- result
+
+Successful tasks can generate follow-ups automatically:
+
+- coder task -> reviewer
+- coder task -> docs-writer when docs impact is implied
+- reviewer task -> qa
+
+Worker results are written to:
+
+```text
+outputs/<task-id>.md
+```
 
 ## Project structure
+
+Running `ai-start` in a new project creates:
 
 ```text
 project/
@@ -47,15 +215,69 @@ project/
 └─ outputs/
 ```
 
-## Notes
+Shared runtime files live in:
 
-- The runtime prefers `cmux` when available and falls back to `tmux` if `cmux` is not installed.
-- Claude CLI is used for spawned workers when available. If it is missing, worker windows print the prepared prompt and exit.
-- The leader window auto-routes plain text by keywords. UI and React work go to `frontend-coder`, Tauri and mux work go to `desktop-coder`, watcher and automation work go to `crawler-coder`, docs go to `docs-writer`, and unmatched work falls back to `backend-coder`.
-- Use `/spawn <role> <text>` to target a specialist explicitly, `/qa <text>` for validation, `/docs <text>` for docs, `/review <text>` for review, and `/status` to inspect state.
-- Idle auto-scaled windows are cleaned up by the watcher after `AI_IDLE_TTL_SECONDS` seconds. Default is `120`.
-- Completed worker runs write `outputs/<task-id>.md` and store the artifact path in task state.
-- Successful coder tasks can enqueue reviewer, QA, and docs follow-ups based on per-task policy.
+```text
+~/.ai-runtime/
+├─ bin/
+├─ scripts/
+├─ prompts/
+├─ templates/
+└─ lib/
+```
+
+## Configuration
+
+The project runtime is controlled by `.ai-config.yaml`.
+
+Example:
+
+```yaml
+project: my-project
+
+agents:
+  - name: leader
+    prompt: .ai-agents/leader.md
+
+  - name: backend-coder
+    prompt: .ai-agents/backend-coder.md
+    scale: auto
+    min: 0
+    max: 3
+
+  - name: reviewer
+    prompt: .ai-agents/reviewer.md
+    scale: auto
+    min: 0
+    max: 2
+
+paths:
+  tasks: ./tasks
+  outputs: ./outputs
+```
+
+Each role prompt lives in a file so that project behavior stays explicit and versioned.
+
+## Operational notes
+
+- `cmux` is preferred, `tmux` is used automatically if `cmux` is missing.
+- Task and agent state are stored as JSON files and written atomically.
+- Prompt files generated during execution are stored under `.ai-state/` and are gitignored by default.
+- Artifact outputs are written under `outputs/` and are gitignored by default.
+- The current runtime is designed for local developer workstations, not multi-user remote scheduling.
+
+## Quick start summary
+
+```bash
+git clone https://github.com/picory/cmux-multi-agent.git
+cd cmux-multi-agent
+./setup.sh
+
+cd /path/to/your-project
+ai-start
+```
+
+Then submit work in the `leader` window and let the watcher handle worker orchestration.
 
 ## License
 
