@@ -35,6 +35,7 @@ ai-start
 ```
 
 `ai-start` ensures project scaffolding exists, starts a mux session, opens `leader` and `watcher`, and lets the watcher spawn specialist workers as tasks appear.
+The `leader` window is an interactive Claude conductor session, not a custom text prompt loop.
 
 ## Why use it?
 
@@ -107,10 +108,11 @@ This will:
 2. create `.ai-agents/` role prompt files if missing
 3. create `tasks/`, `outputs/`, and `.ai-state/`
 4. open a mux session with `leader` and `watcher`
+5. start Claude directly inside the `leader` window
 
-### 2. Submit work from the leader window
+### 2. Talk to Claude in the leader window
 
-The leader accepts natural language input and routes it to specialist roles.
+The leader window is the main Claude session. You talk to it directly, and it uses the runtime queue to orchestrate specialists.
 
 Examples:
 
@@ -136,6 +138,13 @@ You can also target roles explicitly:
 /status
 ```
 
+Under the hood, the leader uses runtime commands such as:
+
+```bash
+python3 ~/.ai-runtime/lib/runtime.py enqueue --project-dir /path/to/project --role backend-coder --text "Implement API auth flow"
+python3 ~/.ai-runtime/lib/runtime.py status --project-dir /path/to/project
+```
+
 ### 3. Watch execution
 
 The watcher reads queued tasks, scales up matching worker roles, and closes idle worker windows after the configured TTL.
@@ -150,8 +159,9 @@ Defaults:
 ### Control roles
 
 - `leader`
-  - accepts work
-  - routes tasks
+  - runs Claude directly
+  - accepts work from the user
+  - routes tasks through the runtime queue
   - acts as the orchestration entry point
 - `watcher`
   - monitors task queue and agent pool
