@@ -20,7 +20,7 @@ Claude Code can already coordinate work, but visible multi-agent execution is st
 
 This repository provides two layers:
 
-- Shared runtime in `~/.ai-runtime`
+- Shared runtime in `~/.cmux-runtime`
   - installed once
   - contains the reusable launcher, watcher, prompts, and helper scripts
 - Project-local configuration
@@ -31,10 +31,10 @@ Once installed, the expected workflow is:
 
 ```bash
 cd /path/to/your-project
-ai-start
+teamstart
 ```
 
-`ai-start` ensures project scaffolding exists, starts a mux session, opens `leader` and `watcher`, and lets the watcher spawn specialist workers as tasks appear.
+`teamstart` ensures project scaffolding exists, starts a mux session, opens `leader` and `watcher`, and lets the watcher spawn specialist workers as tasks appear.
 The `leader` window is an interactive Claude conductor session, not a custom text prompt loop.
 
 ## Why use it?
@@ -81,11 +81,12 @@ cd cmux-multi-agent
 
 What `setup.sh` does:
 
-- installs or refreshes the shared runtime in `~/.ai-runtime`
-- links `ai-start` and `ai-init` into `~/.local/bin`
+- installs or refreshes the shared runtime in `~/.cmux-runtime`
+- links `teamstart` and `teaminit` into `~/.local/bin`
+- keeps `ai-start` and `ai-init` as compatibility aliases
 - initializes the current repository with default `.ai-*` scaffolding if it does not already exist
 
-If `ai-start` is not found after setup, add this to your shell profile:
+If `teamstart` is not found after setup, add this to your shell profile:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -99,7 +100,7 @@ Move into the repository where you want multi-agent execution and run:
 
 ```bash
 cd /path/to/your-project
-ai-start
+teamstart
 ```
 
 This will:
@@ -141,8 +142,8 @@ You can also target roles explicitly:
 Under the hood, the leader uses runtime commands such as:
 
 ```bash
-python3 ~/.ai-runtime/lib/runtime.py enqueue --project-dir /path/to/project --role backend-coder --text "Implement API auth flow"
-python3 ~/.ai-runtime/lib/runtime.py status --project-dir /path/to/project
+python3 ~/.cmux-runtime/lib/runtime.py enqueue --project-dir /path/to/project --role backend-coder --text "Implement API auth flow"
+python3 ~/.cmux-runtime/lib/runtime.py status --project-dir /path/to/project
 ```
 
 ### 3. Watch execution
@@ -204,7 +205,7 @@ outputs/<task-id>.md
 
 ## Project structure
 
-Running `ai-start` in a new project creates:
+Running `teamstart` in a new project creates:
 
 ```text
 project/
@@ -228,7 +229,7 @@ project/
 Shared runtime files live in:
 
 ```text
-~/.ai-runtime/
+~/.cmux-runtime/
 ├─ bin/
 ├─ scripts/
 ├─ prompts/
@@ -285,7 +286,7 @@ cd cmux-multi-agent
 ./setup.sh
 
 cd /path/to/your-project
-ai-start
+teamstart
 ```
 
 Then submit work in the `leader` window and let the watcher handle worker orchestration.

@@ -3,6 +3,6 @@ set -euo pipefail
 
 PROJECT_DIR="${1:-$PWD}"
 AGENT_NAME="${2:?agent name is required}"
-RUNTIME_HOME="${AI_RUNTIME_HOME:-$HOME/.ai-runtime}"
+RUNTIME_HOME="${CMUX_RUNTIME_HOME:-${AI_RUNTIME_HOME:-$HOME/.cmux-runtime}}"
 
 python3 "$RUNTIME_HOME/lib/runtime.py" kill --project-dir "$PROJECT_DIR" --agent-name "$AGENT_NAME"

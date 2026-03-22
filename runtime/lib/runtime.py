@@ -39,7 +39,8 @@ def safe_name(value: str) -> str:
 
 
 def runtime_home() -> Path:
-    return Path(os.environ.get("AI_RUNTIME_HOME", str(Path.home() / ".ai-runtime"))).expanduser()
+    value = os.environ.get("CMUX_RUNTIME_HOME") or os.environ.get("AI_RUNTIME_HOME") or str(Path.home() / ".cmux-runtime")
+    return Path(value).expanduser()
 
 
 def ensure_dir(path: Path) -> None:
@@ -945,6 +946,8 @@ def setup(repo_root: Path, project_dir: Path) -> None:
         ensure_dir(rt_home / name)
 
     mapping = {
+        repo_root / "runtime" / "bin" / "teamstart": rt_home / "bin" / "teamstart",
+        repo_root / "runtime" / "bin" / "teaminit": rt_home / "bin" / "teaminit",
         repo_root / "runtime" / "bin" / "ai-start": rt_home / "bin" / "ai-start",
         repo_root / "runtime" / "bin" / "ai-init": rt_home / "bin" / "ai-init",
         repo_root / "runtime" / "scripts" / "spawn.sh": rt_home / "scripts" / "spawn.sh",
@@ -968,7 +971,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     local_bin = Path.home() / ".local" / "bin"
     ensure_dir(local_bin)
-    for name in ["ai-start", "ai-init"]:
+    for name in ["teamstart", "teaminit", "ai-start", "ai-init"]:
         link = local_bin / name
         target = rt_home / "bin" / name
         if link.exists() or link.is_symlink():
