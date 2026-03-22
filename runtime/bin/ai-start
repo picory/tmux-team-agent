@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RUNTIME_HOME="${AI_RUNTIME_HOME:-$HOME/.ai-runtime}"
+python3 "$RUNTIME_HOME/lib/runtime.py" start --project-dir "${1:-$PWD}"

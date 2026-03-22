@@ -1,0 +1,51 @@
+project: cmux-multi-agent
+
+agents:
+  - name: leader
+    prompt: .ai-agents/leader.md
+
+  - name: backend-coder
+    prompt: .ai-agents/backend-coder.md
+    scale: auto
+    min: 0
+    max: 3
+
+  - name: frontend-coder
+    prompt: .ai-agents/frontend-coder.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: desktop-coder
+    prompt: .ai-agents/desktop-coder.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: crawler-coder
+    prompt: .ai-agents/crawler-coder.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: reviewer
+    prompt: .ai-agents/reviewer.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: qa
+    prompt: .ai-agents/qa.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: docs-writer
+    prompt: .ai-agents/docs-writer.md
+    scale: auto
+    min: 0
+    max: 1
+
+paths:
+  tasks: ./tasks
+  outputs: ./outputs
