@@ -87,7 +87,7 @@ If you are on Windows, run these steps inside WSL2 rather than native PowerShell
 What `setup.sh` does:
 
 - installs or refreshes the shared runtime in `~/.tmux-runtime`
-- links `teamstart` and `teaminit` into `~/.local/bin`
+- links `teamstart`, `teaminit`, and `teamclean` into `~/.local/bin`
 - initializes the current repository with default `.ai-*` scaffolding if needed
 
 If `teamstart` is not found after setup, add this to your shell profile:
@@ -97,6 +97,15 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Usage
+
+### 0. Clean a previous install before reinstalling
+
+```bash
+cd /path/to/your-project
+teamclean
+```
+
+`teamclean` stops the project tmux session, removes the shared runtime install, and clears the project-local `.ai-state/`, `tasks/`, and `outputs/` directories so `./setup.sh` can start from a clean slate.
 
 ### 1. Start the runtime in a project
 

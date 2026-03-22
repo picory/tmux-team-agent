@@ -135,16 +135,12 @@ def detect_mux() -> str:
     if preferred:
         if mux_supports_tmux_cli(preferred):
             return preferred
-        if preferred != "tmux" and command_exists("tmux"):
+        if command_exists("tmux"):
             return "tmux"
-        raise SystemExit(f"{preferred} is configured but does not support tmux-compatible session commands.")
-    if command_exists("cmux") and mux_supports_tmux_cli("cmux"):
-        return "cmux"
+        raise SystemExit(f"{preferred} is configured but does not support tmux session commands.")
     if command_exists("tmux"):
         return "tmux"
-    if command_exists("cmux"):
-        raise SystemExit("cmux is installed, but this runtime currently requires tmux-compatible session commands. Install tmux or force AI_MUX_BIN=tmux.")
-    raise SystemExit("Neither cmux nor tmux is installed.")
+    raise SystemExit("tmux is not installed.")
 
 
 def session_name(project_dir: Path) -> str:
@@ -938,6 +934,38 @@ def kill_agent(project_dir: Path, agent_name: str) -> None:
     save_state(project_dir, cfg, tasks, pool)
 
 
+def remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def clean(project_dir: Path) -> None:
+    session = session_name(project_dir)
+    if command_exists("tmux") and mux_has_session("tmux", session):
+        subprocess.run(["tmux", "kill-session", "-t", session], check=False, text=True, capture_output=True)
+
+    cfg = ensure_project(project_dir)
+    paths = project_paths(project_dir, cfg)
+    targets = [
+        project_dir / ".ai-state",
+        paths["tasks_file"].parent,
+        paths["outputs_dir"],
+        project_dir / ".claude",
+    ]
+    for path in targets:
+        remove_path(path)
+
+    rt_home = runtime_home()
+    local_bin = Path.home() / ".local" / "bin"
+    for name in ["ai-start", "ai-init", "ai-clean", "teamstart", "teaminit", "teamclean"]:
+        remove_path(local_bin / name)
+    remove_path(rt_home)
+
+    print(f"cleaned runtime install and project state for {project_dir}")
+
+
 def setup(repo_root: Path, project_dir: Path) -> None:
     rt_home = runtime_home()
     ensure_dir(rt_home)
@@ -947,8 +975,10 @@ def setup(repo_root: Path, project_dir: Path) -> None:
     mapping = {
         repo_root / "runtime" / "bin" / "ai-start": rt_home / "bin" / "ai-start",
         repo_root / "runtime" / "bin" / "ai-init": rt_home / "bin" / "ai-init",
+        repo_root / "runtime" / "bin" / "ai-clean": rt_home / "bin" / "ai-clean",
         repo_root / "runtime" / "bin" / "teamstart": rt_home / "bin" / "teamstart",
         repo_root / "runtime" / "bin" / "teaminit": rt_home / "bin" / "teaminit",
+        repo_root / "runtime" / "bin" / "teamclean": rt_home / "bin" / "teamclean",
         repo_root / "runtime" / "scripts" / "spawn.sh": rt_home / "scripts" / "spawn.sh",
         repo_root / "runtime" / "scripts" / "kill.sh": rt_home / "scripts" / "kill.sh",
         repo_root / "runtime" / "scripts" / "watcher.sh": rt_home / "scripts" / "watcher.sh",
@@ -970,7 +1000,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     local_bin = Path.home() / ".local" / "bin"
     ensure_dir(local_bin)
-    for name in ["ai-start", "ai-init", "teamstart", "teaminit"]:
+    for name in ["ai-start", "ai-init", "ai-clean", "teamstart", "teaminit", "teamclean"]:
         link = local_bin / name
         target = rt_home / "bin" / name
         if link.exists() or link.is_symlink():
@@ -1240,6 +1270,9 @@ def main() -> int:
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project-dir", required=True)
 
+    clean_parser = sub.add_parser("clean")
+    clean_parser.add_argument("--project-dir", required=True)
+
     start_parser = sub.add_parser("start")
     start_parser.add_argument("--project-dir", required=True)
 
@@ -1287,6 +1320,9 @@ def main() -> int:
     if args.command == "init":
         ensure_project(Path(args.project_dir).resolve())
         print(f"initialized {args.project_dir}")
+        return 0
+    if args.command == "clean":
+        clean(Path(args.project_dir).resolve())
         return 0
     if args.command == "start":
         start(Path(args.project_dir).resolve())
