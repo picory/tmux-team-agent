@@ -960,11 +960,6 @@ def setup(repo_root: Path, project_dir: Path) -> None:
             dest.unlink()
         dest.symlink_to(src)
 
-    for legacy_name in ["ai-start", "ai-init"]:
-        legacy_path = rt_home / "bin" / legacy_name
-        if legacy_path.exists() or legacy_path.is_symlink():
-            legacy_path.unlink()
-
     for src_dir_name in ["prompts", "templates"]:
         src_dir = repo_root / "runtime" / src_dir_name if src_dir_name == "prompts" else repo_root / "templates"
         dest_dir = rt_home / src_dir_name
@@ -980,11 +975,6 @@ def setup(repo_root: Path, project_dir: Path) -> None:
         if link.exists() or link.is_symlink():
             link.unlink()
         link.symlink_to(target)
-
-    for legacy_name in ["ai-start", "ai-init"]:
-        legacy_link = local_bin / legacy_name
-        if legacy_link.exists() or legacy_link.is_symlink():
-            legacy_link.unlink()
 
     ensure_project(project_dir)
 
