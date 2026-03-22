@@ -39,7 +39,7 @@ def safe_name(value: str) -> str:
 
 
 def runtime_home() -> Path:
-    value = os.environ.get("CMUX_RUNTIME_HOME") or os.environ.get("AI_RUNTIME_HOME") or str(Path.home() / ".cmux-runtime")
+    value = os.environ.get("CMUX_RUNTIME_HOME") or str(Path.home() / ".cmux-runtime")
     return Path(value).expanduser()
 
 
@@ -948,8 +948,6 @@ def setup(repo_root: Path, project_dir: Path) -> None:
     mapping = {
         repo_root / "runtime" / "bin" / "teamstart": rt_home / "bin" / "teamstart",
         repo_root / "runtime" / "bin" / "teaminit": rt_home / "bin" / "teaminit",
-        repo_root / "runtime" / "bin" / "ai-start": rt_home / "bin" / "ai-start",
-        repo_root / "runtime" / "bin" / "ai-init": rt_home / "bin" / "ai-init",
         repo_root / "runtime" / "scripts" / "spawn.sh": rt_home / "scripts" / "spawn.sh",
         repo_root / "runtime" / "scripts" / "kill.sh": rt_home / "scripts" / "kill.sh",
         repo_root / "runtime" / "scripts" / "watcher.sh": rt_home / "scripts" / "watcher.sh",
@@ -962,6 +960,11 @@ def setup(repo_root: Path, project_dir: Path) -> None:
             dest.unlink()
         dest.symlink_to(src)
 
+    for legacy_name in ["ai-start", "ai-init"]:
+        legacy_path = rt_home / "bin" / legacy_name
+        if legacy_path.exists() or legacy_path.is_symlink():
+            legacy_path.unlink()
+
     for src_dir_name in ["prompts", "templates"]:
         src_dir = repo_root / "runtime" / src_dir_name if src_dir_name == "prompts" else repo_root / "templates"
         dest_dir = rt_home / src_dir_name
@@ -971,12 +974,17 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     local_bin = Path.home() / ".local" / "bin"
     ensure_dir(local_bin)
-    for name in ["teamstart", "teaminit", "ai-start", "ai-init"]:
+    for name in ["teamstart", "teaminit"]:
         link = local_bin / name
         target = rt_home / "bin" / name
         if link.exists() or link.is_symlink():
             link.unlink()
         link.symlink_to(target)
+
+    for legacy_name in ["ai-start", "ai-init"]:
+        legacy_link = local_bin / legacy_name
+        if legacy_link.exists() or legacy_link.is_symlink():
+            legacy_link.unlink()
 
     ensure_project(project_dir)
 

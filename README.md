@@ -83,7 +83,6 @@ What `setup.sh` does:
 
 - installs or refreshes the shared runtime in `~/.cmux-runtime`
 - links `teamstart` and `teaminit` into `~/.local/bin`
-- keeps `ai-start` and `ai-init` as compatibility aliases
 - initializes the current repository with default `.ai-*` scaffolding if it does not already exist
 
 If `teamstart` is not found after setup, add this to your shell profile:
