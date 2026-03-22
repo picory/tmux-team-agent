@@ -66,8 +66,14 @@ Recommended:
 Current platform support:
 
 - macOS: supported
-- Linux: expected to work with the same shell and mux assumptions
-- Windows: not yet supported as a first-class runtime target
+- Linux: supported
+- Windows: supported only through WSL2
+
+Windows support policy:
+
+- Native Windows terminals and pane management are not a first-class target right now.
+- Use WSL2 with a Linux shell environment, `tmux`, `python3`, `bash`, and Claude Code installed inside WSL.
+- Run the runtime from the WSL project path, not from PowerShell or CMD.
 
 ## Installation
 
@@ -78,6 +84,8 @@ git clone https://github.com/picory/cmux-multi-agent.git
 cd cmux-multi-agent
 ./setup.sh
 ```
+
+If you are on Windows, run these steps inside WSL2 rather than native PowerShell or CMD.
 
 What `setup.sh` does:
 
