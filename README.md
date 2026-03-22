@@ -52,3 +52,7 @@ project/
 - Idle auto-scaled windows are cleaned up by the watcher after `AI_IDLE_TTL_SECONDS` seconds. Default is `120`.
 - Completed worker runs write `outputs/<task-id>.md` and store the artifact path in task state.
 - Successful coder tasks can enqueue reviewer, QA, and docs follow-ups based on per-task policy.
+
+## License
+
+MIT. See [LICENSE](/Volumes/m2DATA/01-works/02_personal/cmux-multi-agent/LICENSE).
