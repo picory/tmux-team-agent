@@ -109,14 +109,41 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def mux_supports_tmux_cli(name: str) -> bool:
+    probe_session = "__ai_mux_probe__"
+    try:
+        result = subprocess.run(
+            [name, "new-session", "-d", "-s", probe_session, "true"],
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return False
+
+    if result.returncode != 0:
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        if "unknown command" in output or "not found" in output:
+            return False
+        return False
+
+    subprocess.run([name, "kill-session", "-t", probe_session], text=True, capture_output=True)
+    return True
+
+
 def detect_mux() -> str:
     preferred = os.environ.get("AI_MUX_BIN")
     if preferred:
-        return preferred
-    if command_exists("cmux"):
+        if mux_supports_tmux_cli(preferred):
+            return preferred
+        if preferred != "tmux" and command_exists("tmux"):
+            return "tmux"
+        raise SystemExit(f"{preferred} is configured but does not support tmux-compatible session commands.")
+    if command_exists("cmux") and mux_supports_tmux_cli("cmux"):
         return "cmux"
     if command_exists("tmux"):
         return "tmux"
+    if command_exists("cmux"):
+        raise SystemExit("cmux is installed, but this runtime currently requires tmux-compatible session commands. Install tmux or force AI_MUX_BIN=tmux.")
     raise SystemExit("Neither cmux nor tmux is installed.")
 
 

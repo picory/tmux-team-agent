@@ -52,8 +52,8 @@ You need the following installed on the machine:
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - `cmux` or `tmux`
-  - `cmux` is preferred
-  - `tmux` is used automatically as a fallback
+  - `cmux` is preferred only when it supports tmux-compatible session commands
+  - otherwise the runtime falls back to `tmux` automatically
 - `python3`
 - `bash`
 
@@ -261,6 +261,7 @@ Each role prompt lives in a file so that project behavior stays explicit and ver
 ## Operational notes
 
 - `cmux` is preferred, `tmux` is used automatically if `cmux` is missing.
+- Some `cmux` builds use a workspace/window CLI instead of tmux-compatible `new-session` commands. In that case this runtime falls back to `tmux`.
 - Task and agent state are stored as JSON files and written atomically.
 - Prompt files generated during execution are stored under `.ai-state/` and are gitignored by default.
 - Artifact outputs are written under `outputs/` and are gitignored by default.
