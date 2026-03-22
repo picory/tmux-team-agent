@@ -1,73 +1,72 @@
-# cmux-multi-agent
+# tmux-team-agent
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-gold?style=flat-square)
 
-Multi-agent development orchestration with Claude Code + cmux.
+Multi-agent development orchestration with Claude Code + tmux.
 
-## Why cmux-multi-agent?
+## Why tmux-team-agent?
 
-Claude Code can already coordinate work, but visible multi-agent execution is still useful when you want:
+This project is for teams or solo developers who want a local multi-agent runtime on top of `tmux`.
 
-- role-based parallel work instead of one long opaque session
-- a persistent `leader` and `watcher` control plane
-- project-local agent prompts and policy
-- auto-scaling worker windows based on queued work
-- a repeatable runtime you can drop into multiple repositories
+Instead of running one long opaque Claude session, `tmux-team-agent` gives you:
 
-`cmux-multi-agent` puts a runtime layer on top of `cmux` or `tmux` so that agent orchestration becomes a project capability, not a one-off terminal trick.
+- a visible `leader` session
+- a background `watcher`
+- specialist worker panes for implementation, review, QA, and docs
+- project-local prompts and task state
+- a reusable runtime that can be installed once and used across repositories
+
+This is a `tmux` runtime. It is not a native `cmux` runtime.
 
 ## Overview
 
-This repository provides two layers:
+The system has two layers:
 
-- Shared runtime in `~/.cmux-runtime`
+- Shared runtime in `~/.tmux-runtime`
   - installed once
-  - contains the reusable launcher, watcher, prompts, and helper scripts
+  - contains the launcher, prompts, scripts, and runtime code
 - Project-local configuration
   - created inside each target repository
-  - defines agent roles, prompts, tasks, outputs, and state
+  - defines roles, prompts, tasks, outputs, and state
 
-Once installed, the expected workflow is:
+Once installed, the normal workflow is:
 
 ```bash
 cd /path/to/your-project
 teamstart
 ```
 
-`teamstart` ensures project scaffolding exists, starts a mux session, opens `leader` and `watcher`, and lets the watcher spawn specialist workers as tasks appear.
-The `leader` window is an interactive Claude conductor session, not a custom text prompt loop.
+`teamstart` initializes missing project files, starts a `tmux` session, opens `leader` and `watcher`, and lets the watcher scale worker panes based on queued work.
 
-## Why use it?
+## What it does
 
-Use this when you want a local multi-agent development runtime with explicit orchestration.
+Use this when you want:
 
-- You want specialist roles such as `backend-coder`, `frontend-coder`, `desktop-coder`, `crawler-coder`, `reviewer`, `qa`, and `docs-writer`.
-- You want to watch parallel work happen in visible panes instead of waiting for one final summary.
-- You want project prompts and role rules to live in versioned files.
-- You want task state, artifacts, and follow-up actions like review and QA to be persisted locally.
-- You want one runtime that can be reused across many repositories.
+- role-based development flow instead of a single shared prompt
+- visible orchestration in terminal panes
+- task persistence in local JSON files
+- follow-up automation such as review, QA, and docs tasks
+- a repeatable local runtime for many repositories
 
 ## Prerequisites
 
-You need the following installed on the machine:
+Required:
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- `cmux` or `tmux`
-  - `cmux` is preferred only when it supports tmux-compatible session commands
-  - otherwise the runtime falls back to `tmux` automatically
+- `tmux`
 - `python3`
 - `bash`
 
 Recommended:
 
-- a configured `.claude/` directory in the target project or home directory
-- `~/.local/bin` available in your `PATH`
+- a configured `.claude/` directory in the target repository or home directory
+- `~/.local/bin` included in your `PATH`
 
-Current platform support:
+Platform status:
 
 - macOS: supported
-- Linux: expected to work with the same shell and mux assumptions
-- Windows: not yet supported as a first-class runtime target
+- Linux: expected to work
+- Windows: not supported as a first-class runtime target
 
 ## Installation
 
@@ -81,9 +80,9 @@ cd cmux-multi-agent
 
 What `setup.sh` does:
 
-- installs or refreshes the shared runtime in `~/.cmux-runtime`
+- installs or refreshes the shared runtime in `~/.tmux-runtime`
 - links `teamstart` and `teaminit` into `~/.local/bin`
-- initializes the current repository with default `.ai-*` scaffolding if it does not already exist
+- initializes the current repository with default `.ai-*` scaffolding if needed
 
 If `teamstart` is not found after setup, add this to your shell profile:
 
@@ -93,9 +92,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## Usage
 
-### 1. Start a project runtime
-
-Move into the repository where you want multi-agent execution and run:
+### 1. Start the runtime in a project
 
 ```bash
 cd /path/to/your-project
@@ -105,49 +102,34 @@ teamstart
 This will:
 
 1. create `.ai-config.yaml` if missing
-2. create `.ai-agents/` role prompt files if missing
+2. create `.ai-agents/` files if missing
 3. create `tasks/`, `outputs/`, and `.ai-state/`
-4. open a mux session with `leader` and `watcher`
-5. start Claude directly inside the `leader` window
+4. start a `tmux` session with `leader` and `watcher`
+5. launch Claude directly in the `leader` pane when available
 
-### 2. Talk to Claude in the leader window
+### 2. Talk to the leader
 
-The leader window is the main Claude session. You talk to it directly, and it uses the runtime queue to orchestrate specialists.
+The `leader` pane is the main Claude conductor session. You talk to it directly, and it uses the runtime queue to orchestrate specialists.
 
 Examples:
 
 ```text
 React layout 정리
-```
-
-```text
 Tauri 창 제어 버그 수정
-```
-
-```text
 watcher polling 개선
+README 설치 문서 보강
 ```
 
-You can also target roles explicitly:
-
-```text
-/spawn backend-coder API 인증 흐름 정리
-/review 회귀 위험 점검
-/qa watcher 동작 검증
-/docs README 설치 문서 보강
-/status
-```
-
-Under the hood, the leader uses runtime commands such as:
+The leader can also use the runtime CLI explicitly:
 
 ```bash
-python3 ~/.cmux-runtime/lib/runtime.py enqueue --project-dir /path/to/project --role backend-coder --text "Implement API auth flow"
-python3 ~/.cmux-runtime/lib/runtime.py status --project-dir /path/to/project
+python3 ~/.tmux-runtime/lib/runtime.py enqueue --project-dir /path/to/project --role backend-coder --text "Implement API auth flow"
+python3 ~/.tmux-runtime/lib/runtime.py status --project-dir /path/to/project
 ```
 
-### 3. Watch execution
+### 3. Let the watcher manage workers
 
-The watcher reads queued tasks, scales up matching worker roles, and closes idle worker windows after the configured TTL.
+The watcher reads queued tasks, spawns matching workers, and closes idle panes after the configured TTL.
 
 Defaults:
 
@@ -160,12 +142,11 @@ Defaults:
 
 - `leader`
   - runs Claude directly
-  - accepts work from the user
-  - routes tasks through the runtime queue
-  - acts as the orchestration entry point
+  - accepts user requests
+  - routes work into the task queue
 - `watcher`
-  - monitors task queue and agent pool
-  - scales workers up and down
+  - monitors queued tasks and active agents
+  - scales worker panes up and down
 
 ### Specialist roles
 
@@ -190,13 +171,13 @@ Tasks are stored in `tasks/tasks.json` and include metadata such as:
 - artifacts
 - result
 
-Successful tasks can generate follow-ups automatically:
+Successful tasks can create follow-ups automatically:
 
 - coder task -> reviewer
 - coder task -> docs-writer when docs impact is implied
 - reviewer task -> qa
 
-Worker results are written to:
+Worker artifacts are written to:
 
 ```text
 outputs/<task-id>.md
@@ -228,7 +209,7 @@ project/
 Shared runtime files live in:
 
 ```text
-~/.cmux-runtime/
+~/.tmux-runtime/
 ├─ bin/
 ├─ scripts/
 ├─ prompts/
@@ -266,18 +247,17 @@ paths:
   outputs: ./outputs
 ```
 
-Each role prompt lives in a file so that project behavior stays explicit and versioned.
+Each role prompt lives in a file so project behavior remains explicit and versioned.
 
 ## Operational notes
 
-- `cmux` is preferred, `tmux` is used automatically if `cmux` is missing.
-- Some `cmux` builds use a workspace/window CLI instead of tmux-compatible `new-session` commands. In that case this runtime falls back to `tmux`.
+- This runtime requires `tmux`.
 - Task and agent state are stored as JSON files and written atomically.
 - Prompt files generated during execution are stored under `.ai-state/` and are gitignored by default.
 - Artifact outputs are written under `outputs/` and are gitignored by default.
-- The current runtime is designed for local developer workstations, not multi-user remote scheduling.
+- The current runtime is intended for local developer workstations.
 
-## Quick start summary
+## Quick start
 
 ```bash
 git clone https://github.com/picory/cmux-multi-agent.git
@@ -288,7 +268,7 @@ cd /path/to/your-project
 teamstart
 ```
 
-Then submit work in the `leader` window and let the watcher handle worker orchestration.
+Then talk to the `leader` pane and let the watcher orchestrate worker panes in `tmux`.
 
 ## License
 

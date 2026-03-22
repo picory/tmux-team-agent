@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNTIME_HOME="${CMUX_RUNTIME_HOME:-$HOME/.cmux-runtime}"
+RUNTIME_HOME="${TMUX_RUNTIME_HOME:-$HOME/.tmux-runtime}"
 python3 "$RUNTIME_HOME/lib/runtime.py" start --project-dir "${1:-$PWD}"

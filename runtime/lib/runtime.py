@@ -39,7 +39,7 @@ def safe_name(value: str) -> str:
 
 
 def runtime_home() -> Path:
-    value = os.environ.get("CMUX_RUNTIME_HOME") or str(Path.home() / ".cmux-runtime")
+    value = os.environ.get("TMUX_RUNTIME_HOME") or str(Path.home() / ".tmux-runtime")
     return Path(value).expanduser()
 
 
@@ -110,42 +110,15 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def mux_supports_tmux_cli(name: str) -> bool:
-    probe_session = "__ai_mux_probe__"
-    try:
-        result = subprocess.run(
-            [name, "new-session", "-d", "-s", probe_session, "true"],
-            text=True,
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        return False
-
-    if result.returncode != 0:
-        output = f"{result.stdout}\n{result.stderr}".lower()
-        if "unknown command" in output or "not found" in output:
-            return False
-        return False
-
-    subprocess.run([name, "kill-session", "-t", probe_session], text=True, capture_output=True)
-    return True
-
-
 def detect_mux() -> str:
-    preferred = os.environ.get("AI_MUX_BIN")
+    preferred = os.environ.get("TMUX_BIN")
     if preferred:
-        if mux_supports_tmux_cli(preferred):
+        if command_exists(preferred):
             return preferred
-        if preferred != "tmux" and command_exists("tmux"):
-            return "tmux"
-        raise SystemExit(f"{preferred} is configured but does not support tmux-compatible session commands.")
-    if command_exists("cmux") and mux_supports_tmux_cli("cmux"):
-        return "cmux"
+        raise SystemExit(f"{preferred} is configured but was not found.")
     if command_exists("tmux"):
         return "tmux"
-    if command_exists("cmux"):
-        raise SystemExit("cmux is installed, but this runtime currently requires tmux-compatible session commands. Install tmux or force AI_MUX_BIN=tmux.")
-    raise SystemExit("Neither cmux nor tmux is installed.")
+    raise SystemExit("tmux is required for this runtime but was not found.")
 
 
 def session_name(project_dir: Path) -> str:
@@ -433,7 +406,6 @@ def infer_role_from_text(cfg: Config, text: str) -> str:
             "window",
             "terminal",
             "mux",
-            "cmux",
             "tmux",
             "desktopapp",
             "src-tauri",

@@ -5,7 +5,7 @@ PROJECT_DIR="${1:-$PWD}"
 ROLE="${2:?role is required}"
 AGENT_NAME="${3:-}"
 TASK_ID="${4:-}"
-RUNTIME_HOME="${CMUX_RUNTIME_HOME:-$HOME/.cmux-runtime}"
+RUNTIME_HOME="${TMUX_RUNTIME_HOME:-$HOME/.tmux-runtime}"
 
 cmd=(
   python3 "$RUNTIME_HOME/lib/runtime.py" spawn
