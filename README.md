@@ -16,7 +16,7 @@ Instead of running one long opaque Claude session, `tmux-team-agent` gives you:
 - project-local prompts and task state
 - a reusable runtime that can be installed once and used across repositories
 
-This is a `tmux` runtime. It is not a native `cmux` runtime.
+This is a `tmux` runtime for local multi-agent development orchestration.
 
 ## Overview
 
@@ -272,4 +272,4 @@ Then talk to the `leader` pane and let the watcher orchestrate worker panes in `
 
 ## License
 
-MIT. See [LICENSE](/Volumes/m2DATA/01-works/02_personal/cmux-multi-agent/LICENSE).
+MIT. See [LICENSE](LICENSE).
