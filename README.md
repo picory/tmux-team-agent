@@ -1,4 +1,8 @@
-# cmux-multi-agent runtime
+# cmux-multi-agent
+
+![License: MIT](https://img.shields.io/badge/License-MIT-gold?style=flat-square)
+
+Multi-agent development orchestration with Claude Code + cmux.
 
 `ai-start` installs or refreshes the shared runtime in `~/.ai-runtime`, initializes the current project, and starts a multi-agent mux session with a `leader` window and a `watcher` window.
 
