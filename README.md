@@ -6,9 +6,9 @@ Multi-agent development orchestration with Claude Code + tmux.
 
 ## Why tmux-team-agent?
 
-`tmux-team-agent` provides a local multi-agent runtime for development workflows built on top of `tmux`.
+This project is for teams or solo developers who want a local multi-agent runtime on top of `tmux`.
 
-Instead of running one long opaque Claude session, it gives you:
+Instead of running one long opaque Claude session, `tmux-team-agent` gives you:
 
 - a visible `leader` session
 - a background `watcher`
@@ -16,13 +16,15 @@ Instead of running one long opaque Claude session, it gives you:
 - project-local prompts and task state
 - a reusable runtime that can be installed once and used across repositories
 
+This is a `tmux` runtime for local multi-agent development orchestration.
+
 ## Overview
 
 The system has two layers:
 
 - Shared runtime in `~/.tmux-runtime`
   - installed once
-  - contains the launcher, scripts, prompts, and runtime code
+  - contains the launcher, prompts, scripts, and runtime code
 - Project-local configuration
   - created inside each target repository
   - defines roles, prompts, tasks, outputs, and state
@@ -36,7 +38,7 @@ teamstart
 
 `teamstart` initializes missing project files, starts a `tmux` session, opens `leader` and `watcher`, and lets the watcher scale worker panes based on queued work.
 
-## What it is for
+## What it does
 
 Use this when you want:
 
@@ -60,17 +62,13 @@ Recommended:
 - a configured `.claude/` directory in the target repository or home directory
 - `~/.local/bin` included in your `PATH`
 
-Supported environments:
+Platform status:
 
 - macOS: supported
-- Linux: supported
-- Windows: supported only through WSL2
+- Linux: expected to work
+- Windows: not supported as a first-class runtime target
 
-Windows support policy:
-
-- Native Windows terminals and pane management are not a first-class target.
-- Use WSL2 with `tmux`, `python3`, `bash`, and Claude Code installed inside WSL.
-- Run the runtime from the WSL project path, not from PowerShell or CMD.
+If you are on Windows, use WSL2 with `tmux`, `python3`, `bash`, and Claude Code installed inside WSL, and run the runtime from the WSL project path.
 
 ## Installation
 
