@@ -541,6 +541,10 @@ def mux_kill_window(mux: str, session: str, window_name: str) -> None:
     subprocess.run([mux, "kill-window", "-t", f"{session}:{window_name}"], text=True)
 
 
+def mux_select_window(mux: str, session: str, window_name: str) -> None:
+    subprocess.run([mux, "select-window", "-t", f"{session}:{window_name}"], text=True)
+
+
 def mux_attach(mux: str, session: str) -> None:
     os.execvp(mux, [mux, "attach-session", "-t", session])
 
@@ -596,6 +600,25 @@ def create_task(
     return task_id
 
 
+def enqueue_task_cli(
+    project_dir: Path,
+    role: str,
+    text: str,
+    *,
+    created_by: str = "leader",
+    priority: str = "normal",
+    scope: str = "task",
+) -> str:
+    return create_task(
+        project_dir,
+        role,
+        text,
+        created_by=created_by,
+        priority=priority,
+        scope=scope,
+    )
+
+
 def summarize_status(project_dir: Path) -> str:
     cfg = ensure_project(project_dir)
     tasks, pool = load_state(project_dir, cfg)
@@ -605,6 +628,26 @@ def summarize_status(project_dir: Path) -> str:
     active_agents = ", ".join(f"{item['name']}({item['status']})" for item in pool["agents"]) or "none"
     task_summary = ", ".join(f"{key}={value}" for key, value in sorted(counts.items())) or "no tasks"
     return f"tasks: {task_summary}\nagents: {active_agents}"
+
+
+def leader_runtime_instructions(project_dir: Path) -> str:
+    runtime = runtime_home()
+    runtime_py = runtime / "lib" / "runtime.py"
+    project = str(project_dir)
+    return "\n".join(
+        [
+            "Runtime commands:",
+            f"- Queue a task: python3 {runtime_py} enqueue --project-dir {shlex.quote(project)} --role <role> --text '<task>'",
+            f"- Show status: python3 {runtime_py} status --project-dir {shlex.quote(project)}",
+            f"- Spawn explicitly: bash {runtime / 'scripts' / 'spawn.sh'} {shlex.quote(project)} <role>",
+            "",
+            "Working rules:",
+            "- Act as the conductor. Do not implement production code directly unless the user explicitly asks you to stop orchestrating.",
+            "- Convert user requests into concrete role-specific tasks and enqueue them through the runtime commands above.",
+            "- Prefer backend-coder, frontend-coder, desktop-coder, crawler-coder, reviewer, qa, and docs-writer over generic work.",
+            "- Use status checks to understand queue pressure before launching more work.",
+        ]
+    )
 
 
 def upsert_agent(pool: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -957,8 +1000,32 @@ def start(project_dir: Path) -> None:
         if not mux_window_exists(mux, session, "watcher"):
             mux_new_window(mux, session, "watcher", watcher_cmd, project_dir)
 
+    mux_select_window(mux, session, "leader")
     print(f"starting session {session} with {mux}")
     mux_attach(mux, session)
+
+
+def leader_session(project_dir: Path) -> int:
+    ensure_project(project_dir)
+    prompt = merge_prompt(project_dir, "leader")
+    extra = leader_runtime_instructions(project_dir)
+    system_prompt = f"{prompt}\n\n{extra}".strip()
+
+    if not claude_available(project_dir):
+        print("Claude CLI is not available for the leader session. Falling back to manual leader loop.")
+        leader_loop(project_dir)
+        return 0
+
+    cmd = [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--append-system-prompt",
+        system_prompt,
+        "-n",
+        "leader",
+        "You are the leader agent for this project. Accept the user's requests in this session and orchestrate the worker runtime through the provided queue commands.",
+    ]
+    return subprocess.run(cmd, cwd=project_dir).returncode
 
 
 def leader_loop(project_dir: Path) -> None:
@@ -1177,8 +1244,22 @@ def main() -> int:
     leader_parser = sub.add_parser("leader-loop")
     leader_parser.add_argument("--project-dir", required=True)
 
+    leader_session_parser = sub.add_parser("leader-session")
+    leader_session_parser.add_argument("--project-dir", required=True)
+
     watch_parser = sub.add_parser("watch")
     watch_parser.add_argument("--project-dir", required=True)
+
+    enqueue_parser = sub.add_parser("enqueue")
+    enqueue_parser.add_argument("--project-dir", required=True)
+    enqueue_parser.add_argument("--role", required=True)
+    enqueue_parser.add_argument("--text", required=True)
+    enqueue_parser.add_argument("--created-by", default="leader")
+    enqueue_parser.add_argument("--priority", default="normal")
+    enqueue_parser.add_argument("--scope", default="task")
+
+    status_parser = sub.add_parser("status")
+    status_parser.add_argument("--project-dir", required=True)
 
     spawn_parser = sub.add_parser("spawn")
     spawn_parser.add_argument("--project-dir", required=True)
@@ -1211,8 +1292,24 @@ def main() -> int:
     if args.command == "leader-loop":
         leader_loop(Path(args.project_dir).resolve())
         return 0
+    if args.command == "leader-session":
+        return leader_session(Path(args.project_dir).resolve())
     if args.command == "watch":
         watch(Path(args.project_dir).resolve())
+        return 0
+    if args.command == "enqueue":
+        task_id = enqueue_task_cli(
+            Path(args.project_dir).resolve(),
+            args.role,
+            args.text,
+            created_by=args.created_by,
+            priority=args.priority,
+            scope=args.scope,
+        )
+        print(task_id)
+        return 0
+    if args.command == "status":
+        print(summarize_status(Path(args.project_dir).resolve()))
         return 0
     if args.command == "spawn":
         name = spawn_agent(Path(args.project_dir).resolve(), args.role, args.agent_name, args.task_id)
