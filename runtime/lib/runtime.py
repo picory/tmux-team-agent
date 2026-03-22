@@ -135,16 +135,12 @@ def detect_mux() -> str:
     if preferred:
         if mux_supports_tmux_cli(preferred):
             return preferred
-        if preferred != "tmux" and command_exists("tmux"):
+        if command_exists("tmux"):
             return "tmux"
-        raise SystemExit(f"{preferred} is configured but does not support tmux-compatible session commands.")
-    if command_exists("cmux") and mux_supports_tmux_cli("cmux"):
-        return "cmux"
+        raise SystemExit(f"{preferred} is configured but does not support tmux session commands.")
     if command_exists("tmux"):
         return "tmux"
-    if command_exists("cmux"):
-        raise SystemExit("cmux is installed, but this runtime currently requires tmux-compatible session commands. Install tmux or force AI_MUX_BIN=tmux.")
-    raise SystemExit("Neither cmux nor tmux is installed.")
+    raise SystemExit("tmux is not installed.")
 
 
 def session_name(project_dir: Path) -> str:
