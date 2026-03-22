@@ -73,8 +73,8 @@ Platform status:
 Clone this repository and run setup once:
 
 ```bash
-git clone https://github.com/picory/cmux-multi-agent.git
-cd cmux-multi-agent
+git clone https://github.com/picory/tmux-team-agent.git
+cd tmux-team-agent
 ./setup.sh
 ```
 
@@ -260,8 +260,8 @@ Each role prompt lives in a file so project behavior remains explicit and versio
 ## Quick start
 
 ```bash
-git clone https://github.com/picory/cmux-multi-agent.git
-cd cmux-multi-agent
+git clone https://github.com/picory/tmux-team-agent.git
+cd tmux-team-agent
 ./setup.sh
 
 cd /path/to/your-project
