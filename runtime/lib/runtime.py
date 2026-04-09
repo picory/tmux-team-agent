@@ -1246,7 +1246,6 @@ def clean(project_dir: Path) -> None:
         project_dir / ".ai-state",
         paths["tasks_file"].parent,
         paths["outputs_dir"],
-        project_dir / ".claude",
     ]
     for path in targets:
         remove_path(path)
