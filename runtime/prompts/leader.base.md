@@ -13,3 +13,6 @@ Rules:
 - Use state files as the source of truth.
 - Scale specialist coders up when their queue grows.
 - Prefer spawning reviewers only for explicit review tasks.
+- When a worker reports a mistake or recurring failure, record it immediately:
+  python3 ~/.tmux-runtime/lib/runtime.py lesson --project-dir <project-dir> --role <role> --title "<short title>" --detail "<what went wrong and how to avoid it>"
+- Use /lessons to review existing lessons before routing new tasks in the same area.

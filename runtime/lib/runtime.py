@@ -8,7 +8,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -39,7 +38,8 @@ def safe_name(value: str) -> str:
 
 
 def runtime_home() -> Path:
-    return Path(os.environ.get("AI_RUNTIME_HOME", str(Path.home() / ".ai-runtime"))).expanduser()
+    value = os.environ.get("TMUX_RUNTIME_HOME") or str(Path.home() / ".tmux-runtime")
+    return Path(value).expanduser()
 
 
 def ensure_dir(path: Path) -> None:
@@ -109,42 +109,15 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def mux_supports_tmux_cli(name: str) -> bool:
-    probe_session = "__ai_mux_probe__"
-    try:
-        result = subprocess.run(
-            [name, "new-session", "-d", "-s", probe_session, "true"],
-            text=True,
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        return False
-
-    if result.returncode != 0:
-        output = f"{result.stdout}\n{result.stderr}".lower()
-        if "unknown command" in output or "not found" in output:
-            return False
-        return False
-
-    subprocess.run([name, "kill-session", "-t", probe_session], text=True, capture_output=True)
-    return True
-
-
 def detect_mux() -> str:
-    preferred = os.environ.get("AI_MUX_BIN")
+    preferred = os.environ.get("TMUX_BIN")
     if preferred:
-        if mux_supports_tmux_cli(preferred):
+        if command_exists(preferred):
             return preferred
-        if preferred != "tmux" and command_exists("tmux"):
-            return "tmux"
-        raise SystemExit(f"{preferred} is configured but does not support tmux-compatible session commands.")
-    if command_exists("cmux") and mux_supports_tmux_cli("cmux"):
-        return "cmux"
+        raise SystemExit(f"{preferred} is configured but was not found.")
     if command_exists("tmux"):
         return "tmux"
-    if command_exists("cmux"):
-        raise SystemExit("cmux is installed, but this runtime currently requires tmux-compatible session commands. Install tmux or force AI_MUX_BIN=tmux.")
-    raise SystemExit("Neither cmux nor tmux is installed.")
+    raise SystemExit("tmux is required for this runtime but was not found.")
 
 
 def session_name(project_dir: Path) -> str:
@@ -247,10 +220,23 @@ def ensure_project(project_dir: Path) -> Config:
 
     for relative in [
         ".ai-agents/leader.md",
+        ".ai-agents/product-manager.md",
+        ".ai-agents/ux-designer.md",
         ".ai-agents/backend-coder.md",
         ".ai-agents/frontend-coder.md",
+        ".ai-agents/mobile-coder.md",
         ".ai-agents/desktop-coder.md",
+        ".ai-agents/embedded-coder.md",
         ".ai-agents/crawler-coder.md",
+        ".ai-agents/ai-ml-engineer.md",
+        ".ai-agents/data-engineer.md",
+        ".ai-agents/devops-engineer.md",
+        ".ai-agents/cloud-architect.md",
+        ".ai-agents/network-engineer.md",
+        ".ai-agents/dba.md",
+        ".ai-agents/test-harness-engineer.md",
+        ".ai-agents/performance-engineer.md",
+        ".ai-agents/security-engineer.md",
         ".ai-agents/reviewer.md",
         ".ai-agents/qa.md",
         ".ai-agents/docs-writer.md",
@@ -272,6 +258,105 @@ def claude_available(project_dir: Path) -> bool:
     return (project_dir / ".claude").exists() or (Path.home() / ".claude").exists()
 
 
+# ---------------------------------------------------------------------------
+# Lessons — record mistakes to prevent recurrence
+# ---------------------------------------------------------------------------
+
+def claude_project_memory_path(project_dir: Path) -> Path:
+    """Return the Claude Code memory directory for a given project path.
+
+    Claude Code encodes the absolute project path by replacing every '/' and '_'
+    with '-', then uses that as the directory name under ~/.claude/projects/.
+    Example: /Volumes/m2DATA/my_project -> -Volumes-m2DATA-my-project
+    """
+    encoded = str(project_dir.resolve()).replace("/", "-").replace("_", "-")
+    return Path.home() / ".claude" / "projects" / encoded / "memory"
+
+
+def lessons_path(project_dir: Path) -> Path:
+    return project_dir / ".ai-state" / "lessons.json"
+
+
+def load_lessons(project_dir: Path) -> dict:
+    return load_json(lessons_path(project_dir), {"lessons": []})
+
+
+def save_lessons(project_dir: Path, data: dict) -> None:
+    save_json(lessons_path(project_dir), data)
+
+
+def record_lesson(
+    project_dir: Path,
+    role: str | None,
+    title: str,
+    detail: str,
+    source_task_id: str | None = None,
+) -> str:
+    """Save a lesson to .ai-state/lessons.json and to Claude Code memory."""
+    lesson_id = uuid.uuid4().hex[:8]
+    entry = {
+        "id": lesson_id,
+        "role": role,
+        "title": title.strip(),
+        "detail": detail.strip(),
+        "created_at": now_iso(),
+        "source_task_id": source_task_id,
+    }
+
+    # --- project-local lessons.json ---
+    data = load_lessons(project_dir)
+    data["lessons"].append(entry)
+    save_lessons(project_dir, data)
+
+    # --- Claude Code memory (persistent across sessions) ---
+    mem_dir = claude_project_memory_path(project_dir)
+    ensure_dir(mem_dir)
+    role_label = role or "all-roles"
+    scope_line = f"Applies to: **{role}** agent" if role else "Applies to: **all agents**"
+    mem_content = "\n".join([
+        "---",
+        f"name: Lesson {lesson_id}: {entry['title']}",
+        f"description: {role_label} — {entry['title']}",
+        "type: feedback",
+        "---",
+        "",
+        entry["detail"],
+        "",
+        f"**Why:** Recorded from {'task ' + source_task_id if source_task_id else 'manual entry'} in project `{project_dir.name}`.",
+        f"**How to apply:** {scope_line}. Check this before starting similar work.",
+    ])
+    write_text(mem_dir / f"lesson_{lesson_id}.md", mem_content)
+
+    # --- update MEMORY.md index ---
+    memory_index = mem_dir / "MEMORY.md"
+    existing = memory_index.read_text(encoding="utf-8") if memory_index.exists() else "# Memory\n"
+    line = f"- [Lesson {lesson_id}: {entry['title']}](lesson_{lesson_id}.md) — {role_label}: {entry['title']}\n"
+    write_text(memory_index, existing.rstrip("\n") + "\n" + line)
+
+    return lesson_id
+
+
+def list_lessons_text(project_dir: Path, role: str | None = None) -> str:
+    data = load_lessons(project_dir)
+    lessons = data.get("lessons", [])
+    if role:
+        lessons = [l for l in lessons if l.get("role") in (role, None)]
+    if not lessons:
+        return "No lessons recorded yet."
+    lines = [f"Lessons ({len(lessons)} total):"]
+    for l in lessons:
+        r = l.get("role") or "all"
+        lines.append(f"  [{l['id']}] ({r}) {l['title']}")
+        lines.append(f"         {l['detail'][:120]}")
+    return "\n".join(lines)
+
+
+def lessons_for_role(project_dir: Path, role: str) -> list[dict]:
+    """Return lessons applicable to a role (role-specific + global)."""
+    data = load_lessons(project_dir)
+    return [l for l in data.get("lessons", []) if l.get("role") in (role, None)]
+
+
 def merge_prompt(project_dir: Path, role: str) -> str:
     base_path = prompt_root() / f"{role}.base.md"
     project_path = project_dir / ".ai-agents" / f"{role}.md"
@@ -280,6 +365,15 @@ def merge_prompt(project_dir: Path, role: str) -> str:
         chunks.append(read_text(base_path).strip())
     if project_path.exists():
         chunks.append(read_text(project_path).strip())
+
+    # Inject lessons learned for this role
+    applicable = lessons_for_role(project_dir, role)
+    if applicable:
+        lesson_lines = ["## Lessons learned — do not repeat these mistakes"]
+        for l in applicable:
+            lesson_lines.append(f"- **{l['title']}**: {l['detail']}")
+        chunks.append("\n".join(lesson_lines))
+
     return "\n\n".join(chunk for chunk in chunks if chunk).strip()
 
 
@@ -374,7 +468,7 @@ def default_intake_role(cfg: Config) -> str:
             return role
     for item in cfg.agents:
         role = str(item.get("name"))
-        if role not in {"leader", "reviewer", "qa", "docs-writer"}:
+        if role not in {"leader", "reviewer", "qa", "docs-writer", "security-engineer", "performance-engineer", "cloud-architect", "product-manager", "ux-designer"}:
             return role
     return "reviewer"
 
@@ -432,7 +526,6 @@ def infer_role_from_text(cfg: Config, text: str) -> str:
             "window",
             "terminal",
             "mux",
-            "cmux",
             "tmux",
             "desktopapp",
             "src-tauri",
@@ -490,6 +583,204 @@ def infer_role_from_text(cfg: Config, text: str) -> str:
             "문서",
             "리포트",
         ],
+        "product-manager": [
+            "prd",
+            "product",
+            "requirement",
+            "requirements",
+            "user story",
+            "user stories",
+            "roadmap",
+            "feature spec",
+            "acceptance criteria",
+            "기획",
+            "요구사항",
+            "기능 명세",
+        ],
+        "ux-designer": [
+            "ux",
+            "wireframe",
+            "user journey",
+            "user flow",
+            "interaction design",
+            "accessibility",
+            "design system",
+            "prototype",
+            "사용자 경험",
+            "와이어프레임",
+            "디자인",
+        ],
+        "mobile-coder": [
+            "ios",
+            "android",
+            "react native",
+            "flutter",
+            "mobile",
+            "app store",
+            "play store",
+            "push notification",
+            "deep link",
+            "모바일",
+            ".dart",
+            ".swift",
+            ".kotlin",
+        ],
+        "ai-ml-engineer": [
+            "machine learning",
+            "ml",
+            "model training",
+            "inference",
+            "pytorch",
+            "tensorflow",
+            "hugging face",
+            "embedding",
+            "fine-tune",
+            "fine tuning",
+            "llm",
+            "vector",
+            "dataset",
+            "학습",
+            "모델",
+            "인공지능",
+        ],
+        "data-engineer": [
+            "etl",
+            "elt",
+            "data pipeline",
+            "data lake",
+            "data warehouse",
+            "airflow",
+            "dbt",
+            "spark",
+            "kafka",
+            "flink",
+            "schema",
+            "데이터 파이프라인",
+            "데이터 레이크",
+        ],
+        "embedded-coder": [
+            "embedded",
+            "firmware",
+            "mcu",
+            "rtos",
+            "freertos",
+            "bare metal",
+            "interrupt",
+            "gpio",
+            "uart",
+            "spi",
+            "i2c",
+            "watchdog",
+            "임베디드",
+            "펌웨어",
+            ".c",
+            ".h",
+        ],
+        "devops-engineer": [
+            "ci",
+            "cd",
+            "ci/cd",
+            "pipeline",
+            "docker",
+            "kubernetes",
+            "k8s",
+            "helm",
+            "terraform",
+            "deploy",
+            "deployment",
+            "release",
+            "infra",
+            "infrastructure",
+            "배포",
+            "인프라",
+        ],
+        "cloud-architect": [
+            "cloud",
+            "aws",
+            "gcp",
+            "azure",
+            "architecture",
+            "vpc",
+            "iac",
+            "cost optimization",
+            "autoscaling",
+            "serverless",
+            "클라우드",
+            "아키텍처",
+        ],
+        "network-engineer": [
+            "network",
+            "vlan",
+            "routing",
+            "firewall",
+            "acl",
+            "bgp",
+            "ospf",
+            "vpn",
+            "dns",
+            "load balancer",
+            "cisco",
+            "juniper",
+            "네트워크",
+            "방화벽",
+            "라우팅",
+        ],
+        "dba": [
+            "migration",
+            "index",
+            "query optimization",
+            "schema design",
+            "sql",
+            "postgres",
+            "postgresql",
+            "mysql",
+            "mariadb",
+            "mongodb",
+            "slow query",
+            "마이그레이션",
+            "인덱스",
+            "쿼리 최적화",
+        ],
+        "test-harness-engineer": [
+            "test harness",
+            "test infrastructure",
+            "fixture",
+            "factory",
+            "test framework",
+            "test setup",
+            "테스트 하네스",
+            "테스트 인프라",
+        ],
+        "performance-engineer": [
+            "performance",
+            "load test",
+            "stress test",
+            "benchmark",
+            "profiling",
+            "latency",
+            "throughput",
+            "bottleneck",
+            "성능",
+            "부하 테스트",
+            "프로파일링",
+        ],
+        "security-engineer": [
+            "security",
+            "vulnerability",
+            "cve",
+            "owasp",
+            "pentest",
+            "penetration",
+            "exploit",
+            "audit",
+            "threat",
+            "injection",
+            "xss",
+            "csrf",
+            "보안",
+            "취약점",
+            "침투 테스트",
+        ],
     }
 
     for role, keywords in role_keywords.items():
@@ -522,7 +813,6 @@ def mux_has_session(mux: str, name: str) -> bool:
 
 
 def mux_window_exists(mux: str, session: str, window_name: str) -> bool:
-    target = f"{session}:{window_name}"
     result = subprocess.run([mux, "list-windows", "-t", session, "-F", "#W"], text=True, capture_output=True)
     if result.returncode != 0:
         return False
@@ -644,7 +934,7 @@ def leader_runtime_instructions(project_dir: Path) -> str:
             "Working rules:",
             "- Act as the conductor. Do not implement production code directly unless the user explicitly asks you to stop orchestrating.",
             "- Convert user requests into concrete role-specific tasks and enqueue them through the runtime commands above.",
-            "- Prefer backend-coder, frontend-coder, desktop-coder, crawler-coder, reviewer, qa, and docs-writer over generic work.",
+            "- Prefer the most specific specialist role available: product-manager for requirements/PRD, ux-designer for UX flows, backend-coder for API/server logic, frontend-coder for UI, mobile-coder for iOS/Android, desktop-coder for Tauri/native, embedded-coder for firmware/MCU, crawler-coder for scraping/automation, ai-ml-engineer for ML/model work, data-engineer for ETL/pipelines, devops-engineer for CI/CD/containers, cloud-architect for cloud design, network-engineer for networking/firewall, dba for schema/migrations/query tuning, test-harness-engineer for test infra, performance-engineer for load/benchmarks, security-engineer for audits/vulnerabilities, reviewer for code review, qa for verification, docs-writer for documentation.",
             "- Use status checks to understand queue pressure before launching more work.",
         ]
     )
@@ -746,7 +1036,7 @@ def finish_task(
             return
 
 
-def clean_missing_windows(project_dir: Path, cfg: Config, pool: dict[str, Any]) -> None:
+def clean_missing_windows(project_dir: Path, pool: dict[str, Any]) -> None:
     mux = detect_mux()
     session = session_name(project_dir)
     existing = []
@@ -806,7 +1096,7 @@ def write_task_artifact(
     return artifact_path
 
 
-def enqueue_followup_tasks(project_dir: Path, cfg: Config, tasks: dict[str, Any], pool: dict[str, Any], task: dict[str, Any]) -> None:
+def enqueue_followup_tasks(project_dir: Path, cfg: Config, tasks: dict[str, Any], task: dict[str, Any]) -> None:
     role = task["role"]
     policy = task.get("policy", {})
     title = task["title"]
@@ -872,7 +1162,7 @@ def enqueue_followup_tasks(project_dir: Path, cfg: Config, tasks: dict[str, Any]
 def spawn_agent(project_dir: Path, role: str, agent_name: str | None, task_id: str | None) -> str:
     cfg = ensure_project(project_dir)
     tasks, pool = load_state(project_dir, cfg)
-    clean_missing_windows(project_dir, cfg, pool)
+    clean_missing_windows(project_dir, pool)
 
     role_cfg = find_agent_cfg(cfg, role)
     if role_cfg is None:
@@ -938,6 +1228,38 @@ def kill_agent(project_dir: Path, agent_name: str) -> None:
     save_state(project_dir, cfg, tasks, pool)
 
 
+def remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def clean(project_dir: Path) -> None:
+    session = session_name(project_dir)
+    if command_exists("tmux") and mux_has_session("tmux", session):
+        subprocess.run(["tmux", "kill-session", "-t", session], check=False, text=True, capture_output=True)
+
+    cfg = ensure_project(project_dir)
+    paths = project_paths(project_dir, cfg)
+    targets = [
+        project_dir / ".ai-state",
+        paths["tasks_file"].parent,
+        paths["outputs_dir"],
+        project_dir / ".claude",
+    ]
+    for path in targets:
+        remove_path(path)
+
+    rt_home = runtime_home()
+    local_bin = Path.home() / ".local" / "bin"
+    for name in ["ai-start", "ai-init", "ai-clean", "teamstart", "teaminit", "teamclean", "teamupdate"]:
+        remove_path(local_bin / name)
+    remove_path(rt_home)
+
+    print(f"cleaned runtime install and project state for {project_dir}")
+
+
 def setup(repo_root: Path, project_dir: Path) -> None:
     rt_home = runtime_home()
     ensure_dir(rt_home)
@@ -945,10 +1267,10 @@ def setup(repo_root: Path, project_dir: Path) -> None:
         ensure_dir(rt_home / name)
 
     mapping = {
-        repo_root / "runtime" / "bin" / "ai-start": rt_home / "bin" / "ai-start",
-        repo_root / "runtime" / "bin" / "ai-init": rt_home / "bin" / "ai-init",
         repo_root / "runtime" / "bin" / "teamstart": rt_home / "bin" / "teamstart",
         repo_root / "runtime" / "bin" / "teaminit": rt_home / "bin" / "teaminit",
+        repo_root / "runtime" / "bin" / "teamclean": rt_home / "bin" / "teamclean",
+        repo_root / "runtime" / "bin" / "teamupdate": rt_home / "bin" / "teamupdate",
         repo_root / "runtime" / "scripts" / "spawn.sh": rt_home / "scripts" / "spawn.sh",
         repo_root / "runtime" / "scripts" / "kill.sh": rt_home / "scripts" / "kill.sh",
         repo_root / "runtime" / "scripts" / "watcher.sh": rt_home / "scripts" / "watcher.sh",
@@ -970,7 +1292,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     local_bin = Path.home() / ".local" / "bin"
     ensure_dir(local_bin)
-    for name in ["ai-start", "ai-init", "teamstart", "teaminit"]:
+    for name in ["teamstart", "teaminit", "teamclean", "teamupdate"]:
         link = local_bin / name
         target = rt_home / "bin" / name
         if link.exists() or link.is_symlink():
@@ -986,7 +1308,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
 
 def start(project_dir: Path) -> None:
-    cfg = ensure_project(project_dir)
+    ensure_project(project_dir)
     mux = detect_mux()
     session = session_name(project_dir)
     runtime = runtime_home()
@@ -1032,13 +1354,14 @@ def leader_session(project_dir: Path) -> int:
 
 def leader_loop(project_dir: Path) -> None:
     cfg = ensure_project(project_dir)
-    intake_role = default_intake_role(cfg)
     print("leader ready")
     print("plain text => auto-routed specialist task")
     print("/review <text> => reviewer task")
     print("/qa <text> => qa task")
     print("/docs <text> => docs-writer task")
     print("/spawn <role> [text] => enqueue a task for a specific role")
+    print("/lesson [role] | <title> | <detail> => record a lesson to prevent recurrence")
+    print("/lessons [role] => list recorded lessons")
     print("/status => show runtime state")
     print("/quit => exit leader loop")
 
@@ -1080,6 +1403,28 @@ def leader_loop(project_dir: Path) -> None:
             task_id = create_task(project_dir, role, text)
             print(f"queued {role} task {task_id}")
             continue
+        if line.startswith("/lesson "):
+            # format: /lesson [role] | <title> | <detail>
+            # role is optional: /lesson backend-coder | title | detail
+            #                   /lesson | title | detail   (all roles)
+            parts = [p.strip() for p in line[len("/lesson "):].split("|")]
+            if len(parts) == 3:
+                lesson_role: str | None = parts[0] or None
+                lesson_title, lesson_detail = parts[1], parts[2]
+            elif len(parts) == 2:
+                lesson_role = None
+                lesson_title, lesson_detail = parts[0], parts[1]
+            else:
+                print("usage: /lesson [role] | <title> | <detail>")
+                continue
+            lid = record_lesson(project_dir, lesson_role, lesson_title, lesson_detail)
+            print(f"lesson recorded: {lid}")
+            continue
+        if line.startswith("/lessons"):
+            parts = line.split()
+            filter_role = parts[1] if len(parts) > 1 else None
+            print(list_lessons_text(project_dir, filter_role))
+            continue
         role = infer_role_from_text(cfg, line)
         task_id = create_task(project_dir, role, line)
         print(f"queued {role} task {task_id}")
@@ -1094,7 +1439,7 @@ def watch(project_dir: Path) -> None:
 
     while True:
         tasks, pool = load_state(project_dir, cfg)
-        clean_missing_windows(project_dir, cfg, pool)
+        clean_missing_windows(project_dir, pool)
         refresh_agent_states(tasks, pool)
 
         pending_by_role: dict[str, int] = {}
@@ -1222,11 +1567,145 @@ def run_agent(project_dir: Path, role: str, agent_name: str, task_id: str | None
         save_state(project_dir, cfg, tasks, pool)
         task = task_by_id(tasks, task_id)
         if task is not None and exit_code == 0:
-            enqueue_followup_tasks(project_dir, cfg, tasks, pool, task)
+            enqueue_followup_tasks(project_dir, cfg, tasks, task)
             tasks, pool = load_state(project_dir, cfg)
     remove_agent(pool, agent_name)
     save_state(project_dir, cfg, tasks, pool)
     return exit_code
+
+
+def cmd_help() -> None:
+    print(
+        "\n".join([
+            "teamstart — tmux multi-agent runtime",
+            "",
+            "Usage:",
+            "  teamstart [project-dir]      Start the runtime in a project directory",
+            "  teamstart update             Pull latest changes and refresh the runtime",
+            "  teamstart doctor             Check environment and project configuration",
+            "  teamstart help               Show this help message",
+            "",
+            "Standalone commands:",
+            "  teamupdate                   Same as teamstart update",
+            "  teaminit [project-dir]       Initialize project scaffolding only",
+            "  teamclean [project-dir]      Stop session and remove runtime state",
+            "",
+            "Runtime commands (via runtime.py):",
+            "  init        Initialize project scaffolding without starting tmux",
+            "  clean       Stop tmux session and remove runtime state",
+            "  enqueue     Push a task into the queue",
+            "  status      Print queue and agent status",
+            "  spawn       Manually spawn a worker pane",
+            "  kill        Kill a named worker pane",
+            "  lesson      Record a lesson learned",
+            "  lessons     List recorded lessons",
+            "",
+            "Environment variables:",
+            "  TMUX_RUNTIME_HOME     Override shared runtime location (default: ~/.tmux-runtime)",
+            "  TMUX_BIN              Use a custom tmux binary (default: tmux)",
+            "  AI_WATCH_INTERVAL     Watcher polling interval in seconds (default: 5)",
+            "  AI_IDLE_TTL_SECONDS   Seconds before idle worker pane is closed (default: 120)",
+            "",
+            "Docs: https://github.com/picory/tmux-team-agent",
+        ])
+    )
+
+
+def cmd_update(project_dir: Path) -> int:
+    """Pull latest changes from the repo and re-run setup."""
+    # runtime.py is symlinked: resolve() gives <repo>/runtime/lib/runtime.py
+    resolved = Path(__file__).resolve()
+    repo_root = resolved.parents[2]
+
+    if not (repo_root / ".git").exists():
+        print(f"error: could not locate git repo from {resolved}")
+        print("       Is the runtime installed via the git clone? (not a plain copy)")
+        return 1
+
+    print(f"repo: {repo_root}")
+
+    print("\n-- git pull --")
+    result = run(["git", "-C", str(repo_root), "pull"], check=False)
+    if result.returncode != 0:
+        print("warning: git pull failed — continuing with current version")
+
+    print("\n-- setup --")
+    setup(repo_root, project_dir)
+    print("\nruntime updated.")
+    return 0
+
+
+def cmd_doctor(project_dir: Path | None) -> int:
+    ok = True
+
+    def check(label: str, passed: bool, detail: str = "") -> None:
+        nonlocal ok
+        status = "ok  " if passed else "FAIL"
+        if not passed:
+            ok = False
+        suffix = f"  ({detail})" if detail else ""
+        print(f"  [{status}] {label}{suffix}")
+
+    print("tmux-team-agent doctor\n")
+
+    # --- binaries ---
+    print("Binaries:")
+    check("tmux", command_exists("tmux"), shutil.which("tmux") or "not found")
+    check("python3", command_exists("python3"), shutil.which("python3") or "not found")
+    claude_bin = shutil.which("claude")
+    check("claude", claude_bin is not None, claude_bin or "not found")
+
+    # --- runtime install ---
+    print("\nRuntime:")
+    rt_home = runtime_home()
+    check("TMUX_RUNTIME_HOME exists", rt_home.is_dir(), str(rt_home))
+    for sub_name in ["bin", "scripts", "lib"]:
+        check(f"  {sub_name}/", (rt_home / sub_name).is_dir())
+    check("  lib/runtime.py", (rt_home / "lib" / "runtime.py").exists())
+
+    # --- PATH / symlinks ---
+    print("\nPATH:")
+    local_bin = Path.home() / ".local" / "bin"
+    path_dirs = os.environ.get("PATH", "").split(":")
+    check("~/.local/bin in PATH", str(local_bin) in path_dirs, str(local_bin))
+    for cmd_name in ["teamstart", "teaminit", "teamclean", "teamupdate"]:
+        link = local_bin / cmd_name
+        check(f"  {cmd_name}", link.exists() or link.is_symlink())
+
+    # --- environment variables ---
+    print("\nEnvironment:")
+    watch_interval = os.environ.get("AI_WATCH_INTERVAL", "5 (default)")
+    idle_ttl = os.environ.get("AI_IDLE_TTL_SECONDS", "120 (default)")
+    tmux_bin_env = os.environ.get("TMUX_BIN", "tmux (default)")
+    print(f"  AI_WATCH_INTERVAL     = {watch_interval}")
+    print(f"  AI_IDLE_TTL_SECONDS   = {idle_ttl}")
+    print(f"  TMUX_BIN              = {tmux_bin_env}")
+    print(f"  TMUX_RUNTIME_HOME     = {os.environ.get('TMUX_RUNTIME_HOME', f'{rt_home} (default)')}")
+
+    # --- project ---
+    if project_dir is not None and project_dir.is_dir():
+        print(f"\nProject: {project_dir}")
+        config_file = project_dir / ".ai-config.yaml"
+        check(".ai-config.yaml", config_file.exists())
+        agents_dir = project_dir / ".ai-agents"
+        check(".ai-agents/", agents_dir.is_dir())
+        if agents_dir.is_dir():
+            expected_roles = ["leader", "backend-coder", "frontend-coder", "reviewer", "qa", "docs-writer"]
+            for role in expected_roles:
+                check(f"  .ai-agents/{role}.md", (agents_dir / f"{role}.md").exists())
+        check("tasks/", (project_dir / "tasks").is_dir())
+        check("outputs/", (project_dir / "outputs").is_dir())
+        check(".ai-state/", (project_dir / ".ai-state").is_dir())
+    else:
+        print("\nProject: (pass a project-dir to check project config)")
+
+    print()
+    if ok:
+        print("All checks passed.")
+        return 0
+    else:
+        print("Some checks failed. Run './setup.sh' to repair the runtime install.")
+        return 1
 
 
 def main() -> int:
@@ -1239,6 +1718,9 @@ def main() -> int:
 
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project-dir", required=True)
+
+    clean_parser = sub.add_parser("clean")
+    clean_parser.add_argument("--project-dir", required=True)
 
     start_parser = sub.add_parser("start")
     start_parser.add_argument("--project-dir", required=True)
@@ -1279,6 +1761,25 @@ def main() -> int:
     agent_parser.add_argument("--agent-name", required=True)
     agent_parser.add_argument("--task-id")
 
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument("--project-dir")
+
+    update_parser = sub.add_parser("update")
+    update_parser.add_argument("--project-dir", default=None)
+
+    sub.add_parser("help")
+
+    lesson_parser = sub.add_parser("lesson")
+    lesson_parser.add_argument("--project-dir", required=True)
+    lesson_parser.add_argument("--role", default=None, help="target role (omit for all roles)")
+    lesson_parser.add_argument("--title", required=True)
+    lesson_parser.add_argument("--detail", required=True)
+    lesson_parser.add_argument("--task-id", default=None)
+
+    lessons_parser = sub.add_parser("lessons")
+    lessons_parser.add_argument("--project-dir", required=True)
+    lessons_parser.add_argument("--role", default=None)
+
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -1287,6 +1788,9 @@ def main() -> int:
     if args.command == "init":
         ensure_project(Path(args.project_dir).resolve())
         print(f"initialized {args.project_dir}")
+        return 0
+    if args.command == "clean":
+        clean(Path(args.project_dir).resolve())
         return 0
     if args.command == "start":
         start(Path(args.project_dir).resolve())
@@ -1322,6 +1826,28 @@ def main() -> int:
         return 0
     if args.command == "run-agent":
         return run_agent(Path(args.project_dir).resolve(), args.role, args.agent_name, args.task_id)
+    if args.command == "doctor":
+        project_dir = Path(args.project_dir).resolve() if args.project_dir else None
+        return cmd_doctor(project_dir)
+    if args.command == "help":
+        cmd_help()
+        return 0
+    if args.command == "update":
+        project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
+        return cmd_update(project_dir)
+    if args.command == "lesson":
+        lesson_id = record_lesson(
+            Path(args.project_dir).resolve(),
+            args.role,
+            args.title,
+            args.detail,
+            source_task_id=args.task_id,
+        )
+        print(f"lesson recorded: {lesson_id}")
+        return 0
+    if args.command == "lessons":
+        print(list_lessons_text(Path(args.project_dir).resolve(), args.role))
+        return 0
     return 1
 
 

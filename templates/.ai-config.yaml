@@ -1,9 +1,24 @@
 project: __PROJECT_NAME__
 
 agents:
+  # --- Control ---
   - name: leader
     prompt: .ai-agents/leader.md
 
+  # --- Planning ---
+  - name: product-manager
+    prompt: .ai-agents/product-manager.md
+    scale: auto
+    min: 0
+    max: 1
+
+  - name: ux-designer
+    prompt: .ai-agents/ux-designer.md
+    scale: auto
+    min: 0
+    max: 1
+
+  # --- Development ---
   - name: backend-coder
     prompt: .ai-agents/backend-coder.md
     scale: auto
@@ -16,8 +31,20 @@ agents:
     min: 0
     max: 2
 
+  - name: mobile-coder
+    prompt: .ai-agents/mobile-coder.md
+    scale: auto
+    min: 0
+    max: 2
+
   - name: desktop-coder
     prompt: .ai-agents/desktop-coder.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: embedded-coder
+    prompt: .ai-agents/embedded-coder.md
     scale: auto
     min: 0
     max: 2
@@ -27,6 +54,63 @@ agents:
     scale: auto
     min: 0
     max: 2
+
+  - name: ai-ml-engineer
+    prompt: .ai-agents/ai-ml-engineer.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: data-engineer
+    prompt: .ai-agents/data-engineer.md
+    scale: auto
+    min: 0
+    max: 2
+
+  # --- Infrastructure ---
+  - name: devops-engineer
+    prompt: .ai-agents/devops-engineer.md
+    scale: auto
+    min: 0
+    max: 2
+
+  - name: cloud-architect
+    prompt: .ai-agents/cloud-architect.md
+    scale: auto
+    min: 0
+    max: 1
+
+  - name: network-engineer
+    prompt: .ai-agents/network-engineer.md
+    scale: auto
+    min: 0
+    max: 1
+
+  # --- Data ---
+  - name: dba
+    prompt: .ai-agents/dba.md
+    scale: auto
+    min: 0
+    max: 1
+
+  # --- Quality ---
+  - name: test-harness-engineer
+    prompt: .ai-agents/test-harness-engineer.md
+    scale: auto
+    min: 0
+    max: 1
+
+  - name: performance-engineer
+    prompt: .ai-agents/performance-engineer.md
+    scale: auto
+    min: 0
+    max: 1
+
+  - name: security-engineer
+    prompt: .ai-agents/security-engineer.md
+    scale: auto
+    min: 0
+    max: 1
 
   - name: reviewer
     prompt: .ai-agents/reviewer.md

@@ -1,5 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNTIME_HOME="${AI_RUNTIME_HOME:-$HOME/.ai-runtime}"
-python3 "$RUNTIME_HOME/lib/runtime.py" start --project-dir "${1:-$PWD}"
+RUNTIME_HOME="${TMUX_RUNTIME_HOME:-$HOME/.tmux-runtime}"
+
+case "${1:-}" in
+  update)
+    shift
+    python3 "$RUNTIME_HOME/lib/runtime.py" update --project-dir "${1:-$PWD}"
+    ;;
+  doctor)
+    shift
+    python3 "$RUNTIME_HOME/lib/runtime.py" doctor ${1:+--project-dir "$1"}
+    ;;
+  help|--help|-h)
+    python3 "$RUNTIME_HOME/lib/runtime.py" help
+    ;;
+  lesson)
+    shift
+    python3 "$RUNTIME_HOME/lib/runtime.py" lesson --project-dir "${PWD}" "$@"
+    ;;
+  lessons)
+    shift
+    python3 "$RUNTIME_HOME/lib/runtime.py" lessons --project-dir "${PWD}" "$@"
+    ;;
+  *)
+    python3 "$RUNTIME_HOME/lib/runtime.py" start --project-dir "${1:-$PWD}"
+    ;;
+esac
