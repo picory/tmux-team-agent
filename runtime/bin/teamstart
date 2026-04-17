@@ -23,6 +23,10 @@ case "${1:-}" in
     shift
     python3 "$RUNTIME_HOME/lib/runtime.py" lessons --project-dir "${PWD}" "$@"
     ;;
+  wizard|init-wizard)
+    shift
+    python3 "$RUNTIME_HOME/lib/runtime.py" wizard --project-dir "${1:-$PWD}"
+    ;;
   *)
     python3 "$RUNTIME_HOME/lib/runtime.py" start --project-dir "${1:-$PWD}"
     ;;

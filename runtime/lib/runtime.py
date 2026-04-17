@@ -258,6 +258,250 @@ def claude_available(project_dir: Path) -> bool:
     return (project_dir / ".claude").exists() or (Path.home() / ".claude").exists()
 
 
+def skills_root() -> Path:
+    return Path(__file__).resolve().parents[1] / "skills"
+
+
+def install_skills(target_dir: Path | None = None) -> list[str]:
+    """Copy runtime skills to ~/.claude/skills/ (or target_dir).
+
+    Only installs skills that do not already exist so user edits are preserved.
+    Returns list of installed skill names.
+    """
+    src_root = skills_root()
+    dest_root = target_dir or (Path.home() / ".claude" / "skills")
+    ensure_dir(dest_root)
+    installed = []
+    if not src_root.is_dir():
+        return installed
+    for skill_dir in sorted(src_root.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_name = skill_dir.name
+        dest_skill = dest_root / skill_name
+        skill_file_src = skill_dir / "SKILL.md"
+        if not skill_file_src.exists():
+            continue
+        if dest_skill.exists():
+            continue  # already installed — don't overwrite
+        ensure_dir(dest_skill)
+        import shutil as _shutil
+        _shutil.copytree(str(skill_dir), str(dest_skill), dirs_exist_ok=True)
+        installed.append(skill_name)
+    return installed
+
+
+def reinstall_skills(target_dir: Path | None = None) -> list[str]:
+    """Force-overwrite runtime skills (used by teamupdate)."""
+    src_root = skills_root()
+    dest_root = target_dir or (Path.home() / ".claude" / "skills")
+    ensure_dir(dest_root)
+    updated = []
+    if not src_root.is_dir():
+        return updated
+    import shutil as _shutil
+    for skill_dir in sorted(src_root.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_name = skill_dir.name
+        skill_file_src = skill_dir / "SKILL.md"
+        if not skill_file_src.exists():
+            continue
+        dest_skill = dest_root / skill_name
+        if dest_skill.exists():
+            _shutil.rmtree(str(dest_skill))
+        _shutil.copytree(str(skill_dir), str(dest_skill))
+        updated.append(skill_name)
+    return updated
+
+
+def setup_claude_settings(project_dir: Path) -> None:
+    """Create .claude/settings.json if it doesn't exist."""
+    settings_path = project_dir / ".claude" / "settings.json"
+    if settings_path.exists():
+        return
+    ensure_dir(settings_path.parent)
+    settings = {
+        "permissions": {
+            "allow": [
+                "Bash(git:*)",
+                "Bash(python3:*)",
+                "Bash(tmux:*)",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+            ],
+            "deny": [],
+        },
+    }
+    save_json(settings_path, settings)
+
+
+def setup_claude_md(project_dir: Path, cfg: Config) -> None:
+    """Create CLAUDE.md with project + team context if it doesn't exist."""
+    claude_md = project_dir / "CLAUDE.md"
+    if claude_md.exists():
+        return
+    roles = [str(a.get("name")) for a in cfg.agents if a.get("name") != "leader"]
+    roles_list = "\n".join(f"- `{r}`" for r in roles)
+    content = f"""# {cfg.project}
+
+## 프로젝트 개요
+
+(여기에 프로젝트 설명을 추가하세요)
+
+## 팀 에이전트 역할
+
+{roles_list}
+
+## 런타임 커맨드
+
+```bash
+# 태스크 큐에 작업 추가
+python3 ~/.tmux-runtime/lib/runtime.py enqueue \\
+  --project-dir $PWD --role <role> --text "<task description>"
+
+# 현재 상태 확인
+python3 ~/.tmux-runtime/lib/runtime.py status --project-dir $PWD
+
+# 교훈 기록
+python3 ~/.tmux-runtime/lib/runtime.py lesson \\
+  --project-dir $PWD --role <role> --title "<title>" --detail "<detail>"
+```
+
+## 규칙
+
+- 구현 전 요구사항을 명확히 한다
+- 태스크는 tasks/tasks.json에서 관리한다
+- 아웃풋은 outputs/<task-id>.md에 기록한다
+"""
+    write_text(claude_md, content)
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    """Interactive prompt with default value."""
+    if default:
+        response = input(f"{prompt} [{default}]: ").strip()
+        return response or default
+    return input(f"{prompt}: ").strip()
+
+
+def _confirm(prompt: str, default: bool = True) -> bool:
+    hint = "Y/n" if default else "y/N"
+    response = input(f"{prompt} [{hint}]: ").strip().lower()
+    if not response:
+        return default
+    return response in ("y", "yes")
+
+
+def cmd_wizard(project_dir: Path) -> None:
+    """First-run interactive setup wizard."""
+    print("\n" + "=" * 60)
+    print("  tmux-team-agent — 최초 설정 마법사")
+    print("=" * 60)
+    print(f"  프로젝트 디렉토리: {project_dir}\n")
+
+    # ── Step 1: Doctor ───────────────────────────────────────────
+    print("[1/5] 환경 점검")
+    run_doctor = _confirm("  환경 점검을 실행할까요?", default=True)
+    if run_doctor:
+        ok = (cmd_doctor(project_dir) == 0)
+        if not ok:
+            proceed = _confirm("\n  일부 점검이 실패했습니다. 계속 진행할까요?", default=False)
+            if not proceed:
+                print("  설정을 중단합니다. 문제를 해결한 후 다시 실행하세요.")
+                return
+    print()
+
+    # ── Step 2: Project name ────────────────────────────────────
+    print("[2/5] 프로젝트 설정")
+    config_path = project_dir / ".ai-config.yaml"
+    default_name = project_dir.name
+    project_name = _ask("  프로젝트명", default=default_name)
+
+    if not config_path.exists():
+        tmpl = template_root()
+        content = read_text(tmpl / ".ai-config.yaml").replace("__PROJECT_NAME__", project_name)
+        write_text(config_path, content)
+        print(f"  .ai-config.yaml 생성됨")
+
+    cfg = parse_ai_config(config_path)
+
+    # scaffold agent files
+    for relative in [
+        ".ai-agents/leader.md", ".ai-agents/product-manager.md", ".ai-agents/ux-designer.md",
+        ".ai-agents/backend-coder.md", ".ai-agents/frontend-coder.md", ".ai-agents/mobile-coder.md",
+        ".ai-agents/desktop-coder.md", ".ai-agents/embedded-coder.md", ".ai-agents/crawler-coder.md",
+        ".ai-agents/ai-ml-engineer.md", ".ai-agents/data-engineer.md", ".ai-agents/devops-engineer.md",
+        ".ai-agents/cloud-architect.md", ".ai-agents/network-engineer.md", ".ai-agents/dba.md",
+        ".ai-agents/test-harness-engineer.md", ".ai-agents/performance-engineer.md",
+        ".ai-agents/security-engineer.md", ".ai-agents/reviewer.md", ".ai-agents/qa.md",
+        ".ai-agents/docs-writer.md", "tasks/tasks.json", ".ai-state/agent_pool.json",
+    ]:
+        target = project_dir / relative
+        src = template_root() / relative
+        if not target.exists() and src.exists():
+            write_text(target, read_text(src))
+    ensure_dir(project_dir / "outputs")
+    ensure_dir(project_dir / ".claude")
+    print(f"  팀 에이전트 파일 초기화 완료")
+    print()
+
+    # ── Step 3: Claude settings ─────────────────────────────────
+    print("[3/5] Claude 설정")
+    setup_claude_settings(project_dir)
+    print(f"  .claude/settings.json {'생성됨' if not (project_dir / '.claude' / 'settings.json').exists() else '이미 존재'}")
+    setup_claude_md(project_dir, cfg)
+    print(f"  CLAUDE.md {'생성됨' if not (project_dir / 'CLAUDE.md').exists() else '이미 존재'}")
+    print()
+
+    # ── Step 4: Skills ──────────────────────────────────────────
+    print("[4/5] 스킬 설치")
+    install = _confirm("  reflect / blueprint / deep-dive 스킬을 ~/.claude/skills/ 에 설치할까요?", default=True)
+    if install:
+        installed = install_skills()
+        if installed:
+            print(f"  설치됨: {', '.join(installed)}")
+        else:
+            print("  모든 스킬이 이미 설치되어 있습니다")
+    print()
+
+    # ── Step 5: Env vars ────────────────────────────────────────
+    print("[5/5] 환경 변수")
+    print("  런타임 동작을 조정하려면 아래 환경변수를 .env 또는 셸 프로파일에 추가하세요:\n")
+    print("    AI_WATCH_INTERVAL=5        # watcher 폴링 간격 (초)")
+    print("    AI_IDLE_TTL_SECONDS=120    # idle 에이전트 종료까지 대기 시간 (초)")
+    print("    TMUX_BIN=tmux              # 커스텀 tmux 바이너리")
+    print("    TMUX_RUNTIME_HOME=~/.tmux-runtime  # 런타임 설치 경로")
+
+    create_env = _confirm("\n  .env.example 파일을 생성할까요?", default=True)
+    if create_env:
+        env_example = project_dir / ".env.example"
+        if not env_example.exists():
+            write_text(env_example, "\n".join([
+                "# tmux-team-agent 환경 변수",
+                "# 필요한 항목을 .env 또는 셸 프로파일에 복사하여 사용하세요",
+                "",
+                "# AI_WATCH_INTERVAL=5",
+                "# AI_IDLE_TTL_SECONDS=120",
+                "# TMUX_BIN=tmux",
+                "# TMUX_RUNTIME_HOME=~/.tmux-runtime",
+                "",
+            ]))
+            print("  .env.example 생성됨")
+
+    # ── Done ────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("  설정 완료!")
+    print("=" * 60)
+    print(f"  프로젝트: {project_name}")
+    print(f"  에이전트: {len(cfg.agents)}개 역할 구성됨")
+    print(f"  스킬: /reflect  /blueprint  /deep-dive")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # Lessons — record mistakes to prevent recurrence
 # ---------------------------------------------------------------------------
@@ -1282,8 +1526,15 @@ def setup(repo_root: Path, project_dir: Path) -> None:
             dest.unlink()
         dest.symlink_to(src)
 
-    for src_dir_name in ["prompts", "templates"]:
-        src_dir = repo_root / "runtime" / src_dir_name if src_dir_name == "prompts" else repo_root / "templates"
+    for src_dir_name in ["prompts", "templates", "skills"]:
+        if src_dir_name == "prompts":
+            src_dir = repo_root / "runtime" / "prompts"
+        elif src_dir_name == "templates":
+            src_dir = repo_root / "templates"
+        else:
+            src_dir = repo_root / "runtime" / "skills"
+        if not src_dir.exists():
+            continue
         dest_dir = rt_home / src_dir_name
         if dest_dir.exists() or dest_dir.is_symlink():
             shutil.rmtree(dest_dir, ignore_errors=True)
@@ -1300,6 +1551,10 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
     ensure_project(project_dir)
 
+    installed = install_skills()
+    if installed:
+        print(f"skills installed: {', '.join(installed)}")
+
     path_hint = str(local_bin)
     print(f"runtime installed at {rt_home}")
     print(f"project initialized at {project_dir}")
@@ -1307,7 +1562,13 @@ def setup(repo_root: Path, project_dir: Path) -> None:
 
 
 def start(project_dir: Path) -> None:
-    ensure_project(project_dir)
+    is_first_run = not (project_dir / ".ai-config.yaml").exists()
+    if is_first_run:
+        cmd_wizard(project_dir)
+        if not _confirm("\n  tmux 세션을 지금 시작할까요?", default=True):
+            return
+    else:
+        ensure_project(project_dir)
     mux = detect_mux()
     session = session_name(project_dir)
     runtime = runtime_home()
@@ -1579,10 +1840,11 @@ def cmd_help() -> None:
             "teamstart — tmux multi-agent runtime",
             "",
             "Usage:",
-            "  teamstart [project-dir]      Start the runtime in a project directory",
-            "  teamstart update             Pull latest changes and refresh the runtime",
-            "  teamstart doctor             Check environment and project configuration",
-            "  teamstart help               Show this help message",
+            "  teamstart [project-dir]      Start (첫 실행 시 자동으로 마법사 실행)",
+            "  teamstart wizard             설정 마법사 수동 실행",
+            "  teamstart update             최신 변경사항 pull 및 런타임 갱신",
+            "  teamstart doctor             환경 및 프로젝트 설정 점검",
+            "  teamstart help               도움말 표시",
             "",
             "Standalone commands:",
             "  teamupdate                   Same as teamstart update",
@@ -1630,6 +1892,12 @@ def cmd_update(project_dir: Path) -> int:
 
     print("\n-- setup --")
     setup(repo_root, project_dir)
+
+    print("\n-- skills --")
+    updated = reinstall_skills()
+    if updated:
+        print(f"skills updated: {', '.join(updated)}")
+
     print("\nruntime updated.")
     return 0
 
@@ -1766,6 +2034,9 @@ def main() -> int:
     update_parser = sub.add_parser("update")
     update_parser.add_argument("--project-dir", default=None)
 
+    wizard_parser = sub.add_parser("wizard")
+    wizard_parser.add_argument("--project-dir", default=None)
+
     sub.add_parser("help")
 
     lesson_parser = sub.add_parser("lesson")
@@ -1834,6 +2105,10 @@ def main() -> int:
     if args.command == "update":
         project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
         return cmd_update(project_dir)
+    if args.command == "wizard":
+        project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
+        cmd_wizard(project_dir)
+        return 0
     if args.command == "lesson":
         lesson_id = record_lesson(
             Path(args.project_dir).resolve(),
