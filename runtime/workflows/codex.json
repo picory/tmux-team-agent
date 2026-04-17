@@ -1,0 +1,118 @@
+{
+  "name": "codex",
+  "description": "Codex 사용 워크플로우: 개발 계획 → [Codex]계획검수 → 구현 → 리뷰 → 테스트설계 → [Codex]시나리오검수 → 테스트 → [Codex]결과검수 → 보완 → 보안 → [Codex]최종검수 → 완료보고",
+  "stages": [
+    {
+      "id": "architecture",
+      "name": "기술 설계 및 개발 계획",
+      "role": "architect",
+      "title_template": "[{task}] 기술 아키텍처 설계 및 개발 계획 수립",
+      "scope": "design",
+      "depends_on": [],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "codex-plan-review",
+      "name": "[Codex] 개발 계획 검수",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}][Codex] 개발 계획 검수 — 오버스펙/보완/추가 정리",
+      "scope": "review",
+      "depends_on": ["architecture"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false},
+      "metadata": {"uses_codex": true, "codex_mode": "plan-review"}
+    },
+    {
+      "id": "coding",
+      "name": "구현/코딩",
+      "role": "backend-coder",
+      "title_template": "[{task}] 기능 구현",
+      "scope": "task",
+      "depends_on": ["codex-plan-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "code-review",
+      "name": "코드 리뷰",
+      "role": "reviewer",
+      "title_template": "[{task}] 코드 리뷰",
+      "scope": "review",
+      "depends_on": ["coding"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "test-design",
+      "name": "테스트 시나리오 설계",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}] 테스트 시나리오 및 하네스 설계",
+      "scope": "qa",
+      "depends_on": ["code-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "codex-scenario-review",
+      "name": "[Codex] 테스트 시나리오 검수",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}][Codex] 테스트 시나리오 검수",
+      "scope": "review",
+      "depends_on": ["test-design"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false},
+      "metadata": {"uses_codex": true, "codex_mode": "scenario-review"}
+    },
+    {
+      "id": "testing",
+      "name": "테스트 실행",
+      "role": "qa",
+      "title_template": "[{task}] 테스트 실행",
+      "scope": "qa",
+      "depends_on": ["codex-scenario-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "codex-test-review",
+      "name": "[Codex] 테스트 결과 검수",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}][Codex] 테스트 결과 검수",
+      "scope": "review",
+      "depends_on": ["testing"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false},
+      "metadata": {"uses_codex": true, "codex_mode": "test-review"}
+    },
+    {
+      "id": "refinement",
+      "name": "보완/고도화",
+      "role": "backend-coder",
+      "title_template": "[{task}] 테스트 피드백 반영 및 보완/고도화",
+      "scope": "task",
+      "depends_on": ["codex-test-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "security",
+      "name": "보안 점검",
+      "role": "security-engineer",
+      "title_template": "[{task}] 보안 취약점 점검",
+      "scope": "qa",
+      "depends_on": ["refinement"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "codex-final-review",
+      "name": "[Codex] 최종 검수",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}][Codex] 최종 검수 진행",
+      "scope": "review",
+      "depends_on": ["security"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false},
+      "metadata": {"uses_codex": true, "codex_mode": "final-review"}
+    },
+    {
+      "id": "completion-report",
+      "name": "Codex 검수 완료 보고서",
+      "role": "product-manager",
+      "title_template": "[{task}] Codex 검수 완료 보고서 작성",
+      "scope": "docs",
+      "depends_on": ["codex-final-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    }
+  ]
+}
