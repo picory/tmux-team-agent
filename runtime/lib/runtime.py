@@ -262,6 +262,14 @@ def skills_root() -> Path:
     return Path(__file__).resolve().parents[1] / "skills"
 
 
+def workflows_root() -> Path:
+    return Path(__file__).resolve().parents[1] / "workflows"
+
+
+def codex_available() -> bool:
+    return command_exists("codex")
+
+
 def install_skills(target_dir: Path | None = None) -> list[str]:
     """Copy runtime skills to ~/.claude/skills/ (or target_dir).
 
@@ -1206,8 +1214,12 @@ def remove_agent(pool: dict[str, Any], agent_name: str) -> None:
 
 
 def claim_task(tasks: dict[str, Any], role: str) -> dict[str, Any] | None:
+    completed = {t["id"] for t in tasks["tasks"] if t["status"] in {"done", "reviewed", "failed"}}
     for task in tasks["tasks"]:
         if task["role"] == role and task["status"] == "pending":
+            deps = task.get("depends_on", [])
+            if not all(dep in completed for dep in deps):
+                continue
             task["status"] = "running"
             task["started_at"] = now_iso()
             task["updated_at"] = now_iso()
@@ -1403,6 +1415,56 @@ def enqueue_followup_tasks(project_dir: Path, cfg: Config, tasks: dict[str, Any]
                 )
 
 
+def enqueue_workflow(project_dir: Path, workflow_name: str, task_description: str) -> list[str]:
+    """Create all workflow stages as tasks with proper depends_on links."""
+    wf_path = runtime_home() / "workflows" / f"{workflow_name}.json"
+    if not wf_path.exists():
+        src_path = workflows_root() / f"{workflow_name}.json"
+        if src_path.exists():
+            wf_path = src_path
+        else:
+            raise SystemExit(f"Workflow not found: {workflow_name}  (looked in {runtime_home() / 'workflows'})")
+
+    workflow = load_json(wf_path, {})
+    stages = workflow.get("stages", [])
+    if not stages:
+        raise SystemExit(f"Workflow '{workflow_name}' has no stages.")
+
+    stage_to_task: dict[str, str] = {}
+    task_ids: list[str] = []
+    root_task_id: str | None = None
+
+    for stage in stages:
+        stage_id = stage["id"]
+        role = stage["role"]
+        title_tpl = stage.get("title_template", "{task}")
+        title = title_tpl.replace("{task}", task_description)
+        scope = stage.get("scope", "task")
+        policy = stage.get("policy")
+        extra_meta = stage.get("metadata", {})
+
+        dep_stage_ids = stage.get("depends_on", [])
+        dep_task_ids = [stage_to_task[sid] for sid in dep_stage_ids if sid in stage_to_task]
+
+        task_id = create_task(
+            project_dir,
+            role,
+            title,
+            created_by="workflow",
+            scope=scope,
+            depends_on=dep_task_ids,
+            root_task_id=root_task_id,
+            policy=policy,
+            metadata={**extra_meta, "workflow": workflow_name, "stage": stage_id},
+        )
+        stage_to_task[stage_id] = task_id
+        task_ids.append(task_id)
+        if root_task_id is None:
+            root_task_id = task_id
+
+    return task_ids
+
+
 def spawn_agent(project_dir: Path, role: str, agent_name: str | None, task_id: str | None) -> str:
     cfg = ensure_project(project_dir)
     tasks, pool = load_state(project_dir, cfg)
@@ -1526,16 +1588,16 @@ def setup(repo_root: Path, project_dir: Path) -> None:
             dest.unlink()
         dest.symlink_to(src)
 
-    for src_dir_name in ["prompts", "templates", "skills"]:
-        if src_dir_name == "prompts":
-            src_dir = repo_root / "runtime" / "prompts"
-        elif src_dir_name == "templates":
-            src_dir = repo_root / "templates"
-        else:
-            src_dir = repo_root / "runtime" / "skills"
+    copy_dirs = {
+        "prompts": repo_root / "runtime" / "prompts",
+        "templates": repo_root / "templates",
+        "skills": repo_root / "runtime" / "skills",
+        "workflows": repo_root / "runtime" / "workflows",
+    }
+    for dest_name, src_dir in copy_dirs.items():
         if not src_dir.exists():
             continue
-        dest_dir = rt_home / src_dir_name
+        dest_dir = rt_home / dest_name
         if dest_dir.exists() or dest_dir.is_symlink():
             shutil.rmtree(dest_dir, ignore_errors=True)
         shutil.copytree(src_dir, dest_dir)
@@ -1620,6 +1682,8 @@ def leader_loop(project_dir: Path) -> None:
     print("/qa <text> => qa task")
     print("/docs <text> => docs-writer task")
     print("/spawn <role> [text] => enqueue a task for a specific role")
+    print("/workflow <name> <description> => enqueue full workflow pipeline")
+    print("  workflows: standard | codex")
     print("/lesson [role] | <title> | <detail> => record a lesson to prevent recurrence")
     print("/lessons [role] => list recorded lessons")
     print("/status => show runtime state")
@@ -1662,6 +1726,20 @@ def leader_loop(project_dir: Path) -> None:
                 role, text = payload, payload
             task_id = create_task(project_dir, role, text)
             print(f"queued {role} task {task_id}")
+            continue
+        if line.startswith("/workflow "):
+            payload = line[len("/workflow ") :].strip()
+            if " " in payload:
+                wf_name, wf_desc = payload.split(" ", 1)
+            else:
+                wf_name, wf_desc = payload, payload
+            try:
+                wf_task_ids = enqueue_workflow(project_dir, wf_name, wf_desc)
+                print(f"workflow '{wf_name}' enqueued: {len(wf_task_ids)} stages")
+                for wf_tid in wf_task_ids:
+                    print(f"  {wf_tid}")
+            except SystemExit as exc:
+                print(f"error: {exc}")
             continue
         if line.startswith("/lesson "):
             # format: /lesson [role] | <title> | <detail>
@@ -1855,6 +1933,9 @@ def cmd_help() -> None:
             "  init        Initialize project scaffolding without starting tmux",
             "  clean       Stop tmux session and remove runtime state",
             "  enqueue     Push a task into the queue",
+            "  workflow    Enqueue a full pipeline workflow",
+            "    --name standard   Codex 미사용 표준 워크플로우 (13단계)",
+            "    --name codex      Codex 사용 워크플로우 (12단계)",
             "  status      Print queue and agent status",
             "  spawn       Manually spawn a worker pane",
             "  kill        Kill a named worker pane",
@@ -1921,6 +2002,9 @@ def cmd_doctor(project_dir: Path | None) -> int:
     check("python3", command_exists("python3"), shutil.which("python3") or "not found")
     claude_bin = shutil.which("claude")
     check("claude", claude_bin is not None, claude_bin or "not found")
+    codex_bin = shutil.which("codex")
+    codex_label = codex_bin if codex_bin else "not found (optional — enables codex workflow)"
+    print(f"  [{'ok  ' if codex_bin else 'skip'}] codex  ({codex_label})")
 
     # --- runtime install ---
     print("\nRuntime:")
@@ -2009,6 +2093,11 @@ def main() -> int:
     enqueue_parser.add_argument("--priority", default="normal")
     enqueue_parser.add_argument("--scope", default="task")
 
+    workflow_parser = sub.add_parser("workflow")
+    workflow_parser.add_argument("--project-dir", required=True)
+    workflow_parser.add_argument("--name", required=True, help="workflow name: standard | codex")
+    workflow_parser.add_argument("--task", required=True, help="task description for all stage titles")
+
     status_parser = sub.add_parser("status")
     status_parser.add_argument("--project-dir", required=True)
 
@@ -2083,6 +2172,12 @@ def main() -> int:
             scope=args.scope,
         )
         print(task_id)
+        return 0
+    if args.command == "workflow":
+        wf_ids = enqueue_workflow(Path(args.project_dir).resolve(), args.name, args.task)
+        print(f"workflow '{args.name}' enqueued: {len(wf_ids)} stages")
+        for wf_id in wf_ids:
+            print(f"  {wf_id}")
         return 0
     if args.command == "status":
         print(summarize_status(Path(args.project_dir).resolve()))

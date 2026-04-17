@@ -1,0 +1,123 @@
+{
+  "name": "standard",
+  "description": "Codex 미사용 표준 개발 워크플로우: 요구사항 분석 → 기획 → 설계 → 구현 → 리뷰 → 테스트 → QA → 보안 → 배포준비 → 완료",
+  "stages": [
+    {
+      "id": "requirements",
+      "name": "요구사항 분석",
+      "role": "product-manager",
+      "title_template": "[{task}] 요구사항 분석 및 PRD 작성",
+      "scope": "analysis",
+      "depends_on": [],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "ux-design",
+      "name": "UX/기획 설계",
+      "role": "ux-designer",
+      "title_template": "[{task}] UX 설계 및 화면 기획",
+      "scope": "design",
+      "depends_on": ["requirements"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "architecture",
+      "name": "기술 설계 및 개발 계획",
+      "role": "architect",
+      "title_template": "[{task}] 기술 아키텍처 설계 및 개발 계획 수립",
+      "scope": "design",
+      "depends_on": ["requirements", "ux-design"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "coding",
+      "name": "구현/코딩",
+      "role": "backend-coder",
+      "title_template": "[{task}] 기능 구현",
+      "scope": "task",
+      "depends_on": ["architecture"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "code-review",
+      "name": "코드 리뷰",
+      "role": "reviewer",
+      "title_template": "[{task}] 코드 리뷰",
+      "scope": "review",
+      "depends_on": ["coding"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "test-design",
+      "name": "테스트 설계",
+      "role": "test-harness-engineer",
+      "title_template": "[{task}] 테스트 시나리오 및 하네스 설계",
+      "scope": "qa",
+      "depends_on": ["code-review"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "testing",
+      "name": "테스트 실행",
+      "role": "qa",
+      "title_template": "[{task}] 테스트 실행 및 결과 검증",
+      "scope": "qa",
+      "depends_on": ["test-design"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "refinement",
+      "name": "보완/고도화",
+      "role": "backend-coder",
+      "title_template": "[{task}] 테스트 피드백 반영 및 보완/고도화",
+      "scope": "task",
+      "depends_on": ["testing"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "performance",
+      "name": "성능 점검",
+      "role": "performance-engineer",
+      "title_template": "[{task}] 성능 점검 및 최적화",
+      "scope": "qa",
+      "depends_on": ["refinement"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "final-qa",
+      "name": "최종 QA 검증",
+      "role": "qa",
+      "title_template": "[{task}] 최종 QA 검증",
+      "scope": "qa",
+      "depends_on": ["performance"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "security",
+      "name": "보안 점검",
+      "role": "security-engineer",
+      "title_template": "[{task}] 보안 취약점 점검",
+      "scope": "qa",
+      "depends_on": ["final-qa"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "deployment-prep",
+      "name": "배포 준비",
+      "role": "devops-engineer",
+      "title_template": "[{task}] 배포 환경 준비 및 인프라 확인",
+      "scope": "ops",
+      "depends_on": ["security"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    },
+    {
+      "id": "completion-report",
+      "name": "작업 완료 보고",
+      "role": "product-manager",
+      "title_template": "[{task}] 작업 완료 보고서 작성",
+      "scope": "docs",
+      "depends_on": ["deployment-prep"],
+      "policy": {"auto_review": false, "auto_qa": false, "auto_docs": false}
+    }
+  ]
+}
