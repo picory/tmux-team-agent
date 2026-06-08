@@ -133,3 +133,6 @@ agents:
 paths:
   tasks: ./tasks
   outputs: ./outputs
+
+# limits:
+#   min_free_memory_mb: 2048   # hold off new agent spawns when free RAM drops below this
