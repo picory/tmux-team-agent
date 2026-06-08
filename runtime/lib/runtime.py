@@ -96,6 +96,35 @@ def shell_join(parts: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
+def get_free_memory_mb() -> int | None:
+    """Return available memory in MB, or None if unavailable."""
+    import platform
+    system = platform.system()
+    if system == "Darwin":
+        try:
+            ps = subprocess.run(["sysctl", "-n", "hw.pagesize"], capture_output=True, text=True, check=False)
+            page_size = int(ps.stdout.strip()) if ps.returncode == 0 else 4096
+            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, check=False)
+            if vm.returncode != 0:
+                return None
+            free_pages = 0
+            for line in vm.stdout.splitlines():
+                for prefix in ("Pages free:", "Pages inactive:"):
+                    if line.startswith(prefix):
+                        free_pages += int(line.split(":")[1].strip().rstrip("."))
+            return (free_pages * page_size) // (1024 * 1024)
+        except (ValueError, IndexError, OSError):
+            return None
+    if system == "Linux":
+        try:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+        except (OSError, ValueError, IndexError):
+            return None
+    return None
+
+
 def run(cmd: list[str], capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -129,6 +158,7 @@ class Config:
     project: str
     agents: list[dict[str, Any]]
     paths: dict[str, str]
+    limits: dict[str, Any]
 
     @property
     def task_dir(self) -> str:
@@ -191,15 +221,21 @@ def parse_ai_config(path: Path) -> Config:
             current_item[key.strip()] = parse_scalar(value.strip())
             continue
 
-        if current_section == "paths" and ":" in stripped:
+        if (
+            current_section
+            and current_section != "agents"
+            and isinstance(root.get(current_section), dict)
+            and ":" in stripped
+        ):
             key, value = stripped.split(":", 1)
-            root["paths"][key.strip()] = parse_scalar(value.strip())
+            root[current_section][key.strip()] = parse_scalar(value.strip())
             continue
 
     return Config(
         project=str(root.get("project", path.parent.name)),
         agents=list(root.get("agents", [])),
         paths=dict(root.get("paths", {})),
+        limits=dict(root.get("limits", {})),
     )
 
 
@@ -379,6 +415,10 @@ python3 ~/.tmux-runtime/lib/runtime.py lesson \\
   --project-dir $PWD --role <role> --title "<title>" --detail "<detail>"
 ```
 
+## 에이전트 참조 규칙
+
+모든 에이전트는 **작업 시작 전 반드시 이 CLAUDE.md를 확인**하고 아래 원칙을 따른다.
+
 ## 규칙
 
 - 구현 전 요구사항을 명확히 한다
@@ -386,6 +426,56 @@ python3 ~/.tmux-runtime/lib/runtime.py lesson \\
 - 아웃풋은 outputs/<task-id>.md에 기록한다
 """
     write_text(claude_md, content)
+
+
+_WORK_PRINCIPLES = """\n## 작업 원칙
+
+이 프로젝트의 모든 버그 수정/기능 구현은 목표 지향 방식으로 수행한다.
+
+### 코딩 전 원칙
+
+**구현 전에 생각하라 (Think Before Coding)**
+- 가정과 불명확한 점을 구현 전에 명시적으로 드러낸다.
+- 해석 사이에서 조용히 선택하지 않는다. 모호하면 질문한다.
+- 확인 가능한 성공 기준을 먼저 정의한다. ("버그 수정" → "버그를 재현하는 테스트를 작성한 뒤 통과시킨다")
+
+**단순함을 우선하라 (Simplicity First)**
+- 문제를 해결하는 최소한의 코드만 작성한다.
+- 추측적 기능, 불필요한 추상화, 요청받지 않은 유연성을 추가하지 않는다.
+- 절반 길이로 쓸 수 있다면 다시 작성한다.
+
+**외과적으로 수정하라 (Surgical Changes)**
+- 기존 코드 편집 시 필요한 부분만 건드린다.
+- 기존 스타일을 유지하고, 변경으로 불필요해진 import/변수만 제거한다.
+- 요청받지 않은 한 기존 dead code를 그대로 둔다.
+
+### 완료 조건
+
+기본 루프: 분석 → 계획 → 구현 → 테스트 → 실패 시 보완 → 완료 보고
+
+- 근본 원인이 설명 가능해야 한다.
+- 관련 테스트가 통과해야 한다.
+- lint/typecheck/build가 가능한 경우 통과해야 한다.
+- 테스트를 삭제하거나 약화하지 않는다.
+- 임시방편, 하드코딩, 에러 무시는 금지한다.
+- 변경 범위는 목표 달성에 필요한 최소 범위로 제한한다.
+
+### 완료 보고
+
+- 원인
+- 변경 파일
+- 수정 내용
+- 실행한 검증 명령
+- 결과
+- 남은 리스크
+"""
+
+
+def _append_work_principles(claude_md: Path) -> None:
+    existing = read_text(claude_md) if claude_md.exists() else ""
+    if "## 작업 원칙" not in existing:
+        with claude_md.open("a", encoding="utf-8") as f:
+            f.write(_WORK_PRINCIPLES)
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -463,6 +553,9 @@ def cmd_wizard(project_dir: Path) -> None:
     print(f"  .claude/settings.json {'생성됨' if not (project_dir / '.claude' / 'settings.json').exists() else '이미 존재'}")
     setup_claude_md(project_dir, cfg)
     print(f"  CLAUDE.md {'생성됨' if not (project_dir / 'CLAUDE.md').exists() else '이미 존재'}")
+    if _confirm("  개발 규칙(작업 원칙)을 CLAUDE.md에 추가할까요?", default=True):
+        _append_work_principles(project_dir / "CLAUDE.md")
+        print("  작업 원칙 추가됨")
     print()
 
     # ── Step 4: Skills ──────────────────────────────────────────
@@ -1169,7 +1262,10 @@ def summarize_status(project_dir: Path) -> str:
         counts[task["status"]] = counts.get(task["status"], 0) + 1
     active_agents = ", ".join(f"{item['name']}({item['status']})" for item in pool["agents"]) or "none"
     task_summary = ", ".join(f"{key}={value}" for key, value in sorted(counts.items())) or "no tasks"
-    return f"tasks: {task_summary}\nagents: {active_agents}"
+    base_cap, effective_cap, burst_mode = compute_spawn_cap(cfg, tasks)
+    total_running = sum(1 for a in pool["agents"] if a.get("role") != "leader")
+    cap_note = f"cap={effective_cap}/8 (burst)" if burst_mode else f"cap={effective_cap}/8"
+    return f"tasks: {task_summary}\nagents: {active_agents}\nspawn: running={total_running}, {cap_note}"
 
 
 def leader_runtime_instructions(project_dir: Path) -> str:
@@ -1768,10 +1864,31 @@ def leader_loop(project_dir: Path) -> None:
         print(f"queued {role} task {task_id}")
 
 
+def compute_spawn_cap(cfg: Config, tasks: dict[str, Any]) -> tuple[int, int, bool]:
+    """Return (base_cap, effective_cap, burst_mode).
+
+    base_cap    = floor(auto_roles × 0.5), clamped [1, 8]
+    burst_cap   = floor(auto_roles × 0.75), clamped [1, 8]  — when 3+ high-priority pending
+    effective_cap = burst_cap if burst_mode else base_cap
+    Absolute hard limit is always 8.
+    """
+    auto_roles = [a for a in cfg.agents if a.get("name") != "leader" and a.get("scale") == "auto"]
+    n = len(auto_roles)
+    base_cap = max(1, min(8, int(n * 0.5)))
+    high_pending = sum(
+        1 for t in tasks["tasks"]
+        if t["status"] == "pending" and t.get("priority") == "high"
+    )
+    burst_mode = high_pending >= 3
+    effective_cap = max(1, min(8, int(n * 0.75))) if burst_mode else base_cap
+    return base_cap, effective_cap, burst_mode
+
+
 def watch(project_dir: Path) -> None:
     cfg = ensure_project(project_dir)
     poll_seconds = int(os.environ.get("AI_WATCH_INTERVAL", "5"))
     idle_ttl_seconds = int(os.environ.get("AI_IDLE_TTL_SECONDS", "120"))
+    _burst_notified = False
     print(f"watcher ready for {project_dir}")
     print(f"claude available: {'yes' if claude_available(project_dir) else 'no'}")
 
@@ -1788,6 +1905,19 @@ def watch(project_dir: Path) -> None:
         for agent in pool["agents"]:
             running_by_role[agent["role"]] = running_by_role.get(agent["role"], 0) + 1
 
+        # --- global spawn cap (rolling + burst) ---
+        base_cap, effective_cap, burst_mode = compute_spawn_cap(cfg, tasks)
+        total_running = sum(1 for a in pool["agents"] if a.get("role") != "leader")
+        if burst_mode and not _burst_notified:
+            high_n = sum(1 for t in tasks["tasks"] if t["status"] == "pending" and t.get("priority") == "high")
+            print(
+                f"[spawn-cap] BURST: {high_n} high-priority tasks pending"
+                f" — cap raised {base_cap}→{effective_cap} (max 8)"
+            )
+            _burst_notified = True
+        elif not burst_mode:
+            _burst_notified = False
+
         changed = False
         for role_cfg in cfg.agents:
             role = role_cfg.get("name")
@@ -1800,9 +1930,20 @@ def watch(project_dir: Path) -> None:
             desired = min(maximum, max(minimum, pending_by_role.get(role, 0)))
             running = running_by_role.get(role, 0)
             while running < desired:
+                if total_running >= 8:
+                    break
+                if total_running >= effective_cap:
+                    break
+                min_free_mb = int(cfg.limits.get("min_free_memory_mb", 0))
+                if min_free_mb > 0:
+                    free_mb = get_free_memory_mb()
+                    if free_mb is not None and free_mb < min_free_mb:
+                        print(f"memory low: {free_mb}MB free < {min_free_mb}MB required, skipping spawn for {role}")
+                        break
                 name = spawn_agent(project_dir, role, None, None)
-                print(f"spawned {name}")
+                print(f"spawned {name} (running={total_running + 1}/{effective_cap})")
                 running += 1
+                total_running += 1
                 changed = True
             if running > desired:
                 now_dt = datetime.now(timezone.utc)
@@ -1921,6 +2062,7 @@ def cmd_help() -> None:
             "  teamstart [project-dir]      Start (첫 실행 시 자동으로 마법사 실행)",
             "  teamstart wizard             설정 마법사 수동 실행",
             "  teamstart update             최신 변경사항 pull 및 런타임 갱신",
+            "  teamstart update --sync-config  위에 더해 .ai-config.yaml 누락 역할/섹션 동기화",
             "  teamstart doctor             환경 및 프로젝트 설정 점검",
             "  teamstart help               도움말 표시",
             "",
@@ -1953,7 +2095,116 @@ def cmd_help() -> None:
     )
 
 
-def cmd_update(project_dir: Path) -> int:
+def _extract_agent_block(template_lines: list[str], role_name: str) -> str | None:
+    """Return the YAML block for role_name from template lines, or None if not found."""
+    in_agents = False
+    in_block = False
+    block_lines: list[str] = []
+
+    for line in template_lines:
+        stripped = line.strip()
+        if not in_agents:
+            if stripped == "agents:":
+                in_agents = True
+            continue
+        # leaving agents section: non-indented, non-empty, non-comment real key
+        if line and not line[0].isspace() and stripped and not stripped.startswith("#"):
+            break
+        if stripped == f"- name: {role_name}":
+            in_block = True
+            block_lines = [line]
+        elif in_block:
+            if stripped.startswith("- name:"):
+                break  # next agent block started
+            block_lines.append(line)
+
+    while block_lines and not block_lines[-1].strip():
+        block_lines.pop()
+    return "\n".join(block_lines) if block_lines else None
+
+
+def sync_config(project_dir: Path) -> list[str]:
+    """Backup .ai-config.yaml then add missing agents/sections from the template.
+
+    Never removes or modifies existing entries — additive only.
+    Returns list of human-readable change descriptions.
+    """
+    config_path = project_dir / ".ai-config.yaml"
+    template_path = template_root() / ".ai-config.yaml"
+    if not config_path.exists() or not template_path.exists():
+        return []
+
+    existing_cfg = parse_ai_config(config_path)
+    existing_roles = {a["name"] for a in existing_cfg.agents}
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as fh:
+        fh.write(read_text(template_path).replace("__PROJECT_NAME__", existing_cfg.project))
+        tmp_path = Path(fh.name)
+    template_cfg = parse_ai_config(tmp_path)
+    os.unlink(tmp_path)
+
+    missing_agents = [a for a in template_cfg.agents if a["name"] not in existing_roles]
+    existing_text = read_text(config_path)
+    has_limits = "limits:" in existing_text or "# limits:" in existing_text
+
+    if not missing_agents and has_limits:
+        return []
+
+    # --- backup ---
+    date_str = datetime.now().strftime("%Y%m%d")
+    backup_path = config_path.with_name(f".ai-config.yaml.{date_str}.bak")
+    shutil.copy2(str(config_path), str(backup_path))
+
+    template_lines = read_text(template_path).splitlines()
+    existing_lines = existing_text.splitlines()
+    changes: list[str] = []
+
+    # --- insert missing agent blocks before paths:/limits: section ---
+    if missing_agents:
+        insert_idx = len(existing_lines)
+        for i, line in enumerate(existing_lines):
+            s = line.strip()
+            if line and not line[0].isspace() and s and not s.startswith("#") and ":" in s:
+                key = s.split(":")[0].strip()
+                if key in ("paths", "limits"):
+                    insert_idx = i
+                    break
+
+        new_block_lines: list[str] = []
+        added_names: list[str] = []
+        for agent in missing_agents:
+            block = _extract_agent_block(template_lines, agent["name"])
+            if block:
+                new_block_lines.append("")
+                new_block_lines.extend(block.splitlines())
+                added_names.append(agent["name"])
+
+        if new_block_lines:
+            # ensure blank line before the section that follows
+            existing_lines = (
+                existing_lines[:insert_idx]
+                + new_block_lines
+                + [""]
+                + existing_lines[insert_idx:]
+            )
+            changes.append(f"roles added: {', '.join(added_names)}")
+
+    # --- append limits section comment if missing ---
+    full_text = "\n".join(existing_lines)
+    if not has_limits and "limits:" not in full_text and "# limits:" not in full_text:
+        existing_lines += [
+            "",
+            "# limits:",
+            "#   min_free_memory_mb: 2048   # hold off new agent spawns when free RAM drops below this",
+        ]
+        changes.append("section added: limits (commented out)")
+
+    write_text(config_path, "\n".join(existing_lines) + "\n")
+    changes.append(f"backup: {backup_path.name}")
+    return changes
+
+
+def cmd_update(project_dir: Path, sync_config_flag: bool = False) -> int:
     """Pull latest changes from the repo and re-run setup."""
     # runtime.py is symlinked: resolve() gives <repo>/runtime/lib/runtime.py
     resolved = Path(__file__).resolve()
@@ -1973,6 +2224,15 @@ def cmd_update(project_dir: Path) -> int:
 
     print("\n-- setup --")
     setup(repo_root, project_dir)
+
+    if sync_config_flag:
+        print("\n-- config sync --")
+        sync_changes = sync_config(project_dir)
+        if sync_changes:
+            for change in sync_changes:
+                print(f"  {change}")
+        else:
+            print("  config up to date")
 
     print("\n-- skills --")
     updated = reinstall_skills()
@@ -2032,6 +2292,28 @@ def cmd_doctor(project_dir: Path | None) -> int:
     print(f"  AI_IDLE_TTL_SECONDS   = {idle_ttl}")
     print(f"  TMUX_BIN              = {tmux_bin_env}")
     print(f"  TMUX_RUNTIME_HOME     = {os.environ.get('TMUX_RUNTIME_HOME', f'{rt_home} (default)')}")
+
+    # --- memory + spawn cap ---
+    print("\nMemory & Spawn Cap:")
+    free_mb = get_free_memory_mb()
+    if free_mb is not None:
+        print(f"  free (approx): {free_mb} MB")
+    else:
+        print("  free: unavailable")
+    if project_dir is not None and (project_dir / ".ai-config.yaml").exists():
+        cfg_tmp = parse_ai_config(project_dir / ".ai-config.yaml")
+        threshold = int(cfg_tmp.limits.get("min_free_memory_mb", 0))
+        if threshold > 0:
+            status = "ok  " if (free_mb or 0) >= threshold else "FAIL"
+            print(f"  [{status}] min_free_memory_mb = {threshold} MB")
+        tasks_tmp = load_json((project_dir / cfg_tmp.task_dir).resolve() / "tasks.json", {"tasks": []})
+        base_cap, effective_cap, burst_mode = compute_spawn_cap(cfg_tmp, tasks_tmp)
+        auto_n = len([a for a in cfg_tmp.agents if a.get("name") != "leader" and a.get("scale") == "auto"])
+        print(f"  auto-scale roles : {auto_n}")
+        print(f"  base cap         : {base_cap}  (floor({auto_n} × 0.5), clamped [1,8])")
+        print(f"  burst cap        : {max(1, min(8, int(auto_n * 0.75)))}  (floor({auto_n} × 0.75), clamped [1,8])")
+        print(f"  effective cap    : {effective_cap}{' [BURST]' if burst_mode else ''}")
+        print(f"  absolute hard limit: 8")
 
     # --- project ---
     if project_dir is not None and project_dir.is_dir():
@@ -2122,6 +2404,8 @@ def main() -> int:
 
     update_parser = sub.add_parser("update")
     update_parser.add_argument("--project-dir", default=None)
+    update_parser.add_argument("--sync-config", action="store_true",
+                               help="merge template config into existing .ai-config.yaml")
 
     wizard_parser = sub.add_parser("wizard")
     wizard_parser.add_argument("--project-dir", default=None)
@@ -2199,7 +2483,7 @@ def main() -> int:
         return 0
     if args.command == "update":
         project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
-        return cmd_update(project_dir)
+        return cmd_update(project_dir, sync_config_flag=args.sync_config)
     if args.command == "wizard":
         project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
         cmd_wizard(project_dir)
