@@ -159,6 +159,9 @@ class Config:
     agents: list[dict[str, Any]]
     paths: dict[str, str]
     limits: dict[str, Any]
+    docs: dict[str, Any]
+    verification: dict[str, Any]
+    review: dict[str, Any]
 
     @property
     def task_dir(self) -> str:
@@ -236,6 +239,9 @@ def parse_ai_config(path: Path) -> Config:
         agents=list(root.get("agents", [])),
         paths=dict(root.get("paths", {})),
         limits=dict(root.get("limits", {})),
+        docs=dict(root.get("docs", {})),
+        verification=dict(root.get("verification", {})),
+        review=dict(root.get("review", {})),
     )
 
 
@@ -357,6 +363,96 @@ def reinstall_skills(target_dir: Path | None = None) -> list[str]:
         _shutil.copytree(str(skill_dir), str(dest_skill))
         updated.append(skill_name)
     return updated
+
+
+def install_commit_hook(project_dir: Path) -> bool:
+    """Install commit-session.sh Stop hook into a project.
+
+    Copies the hook template to .claude/hooks/ and registers it in
+    .claude/settings.json. Safe to call multiple times (idempotent).
+    Returns True if anything changed.
+    """
+    hooks_dir = project_dir / ".claude" / "hooks"
+    ensure_dir(hooks_dir)
+
+    # Copy hook script
+    src = runtime_home() / "hooks" / "commit-session.sh"
+    if not src.exists():
+        # Try finding it relative to runtime.py's own location (dev mode)
+        src = Path(__file__).parent.parent / "hooks" / "commit-session.sh"
+    if not src.exists():
+        return False
+
+    dest = hooks_dir / "commit-session.sh"
+    import shutil as _shutil
+    _shutil.copy2(str(src), str(dest))
+    dest.chmod(0o755)
+
+    # Register in settings.json
+    settings_path = project_dir / ".claude" / "settings.json"
+    settings = load_json(settings_path, {})
+
+    hooks = settings.setdefault("hooks", {})
+    stop_hooks = hooks.setdefault("Stop", [])
+
+    hook_command = "$CLAUDE_PROJECT_DIR/.claude/hooks/commit-session.sh"
+    hook_entry = {"type": "command", "command": hook_command}
+
+    # Check if already registered
+    for group in stop_hooks:
+        for h in group.get("hooks", []):
+            if h.get("command") == hook_command:
+                return False  # already installed
+
+    if stop_hooks:
+        stop_hooks[0].setdefault("hooks", []).append(hook_entry)
+    else:
+        stop_hooks.append({"hooks": [hook_entry]})
+
+    save_json(settings_path, settings)
+    return True
+
+
+def remove_commit_hook(project_dir: Path) -> bool:
+    """Remove commit-session.sh Stop hook from a project.
+
+    Removes the hook script and deregisters it from settings.json.
+    Returns True if anything changed.
+    """
+    hook_command = "$CLAUDE_PROJECT_DIR/.claude/hooks/commit-session.sh"
+    changed = False
+
+    dest = project_dir / ".claude" / "hooks" / "commit-session.sh"
+    if dest.exists():
+        dest.unlink()
+        changed = True
+
+    settings_path = project_dir / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return changed
+
+    settings = load_json(settings_path, {})
+    stop_hooks = settings.get("hooks", {}).get("Stop", [])
+    new_stop = []
+    for group in stop_hooks:
+        filtered = [h for h in group.get("hooks", []) if h.get("command") != hook_command]
+        if filtered:
+            new_stop.append({**group, "hooks": filtered})
+        elif len(group) > 1:  # group has other keys besides "hooks"
+            new_stop.append({**group, "hooks": []})
+        # else drop the now-empty group
+        if len(group.get("hooks", [])) != len(filtered):
+            changed = True
+
+    if changed:
+        settings.setdefault("hooks", {})["Stop"] = new_stop
+        if not new_stop:
+            del settings["hooks"]["Stop"]
+        if not settings.get("hooks"):
+            del settings["hooks"]
+        save_json(settings_path, settings)
+
+    return changed
 
 
 def setup_claude_settings(project_dir: Path) -> None:
@@ -486,12 +582,196 @@ def _ask(prompt: str, default: str = "") -> str:
     return input(f"{prompt}: ").strip()
 
 
+def _set_config_flag(config_path: Path, section: str, key: str, value: str) -> None:
+    """Update a key inside a yaml section in .ai-config.yaml (simple line-based)."""
+    if not config_path.exists():
+        return
+    lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    in_section = False
+    key_line = f"  {key}:"
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == f"{section}:":
+            in_section = True
+            continue
+        if in_section:
+            if line and not line[0].isspace():
+                in_section = False
+                continue
+            if stripped.startswith(f"{key}:"):
+                lines[i] = f"  {key}: {value}\n"
+                config_path.write_text("".join(lines), encoding="utf-8")
+                return
+    # key not found — append under section header
+    for i, line in enumerate(lines):
+        if line.strip() == f"{section}:":
+            lines.insert(i + 1, f"  {key}: {value}\n")
+            config_path.write_text("".join(lines), encoding="utf-8")
+            return
+
+
 def _confirm(prompt: str, default: bool = True) -> bool:
     hint = "Y/n" if default else "y/N"
     response = input(f"{prompt} [{hint}]: ").strip().lower()
     if not response:
         return default
     return response in ("y", "yes")
+
+
+def setup_wiki_llm(project_dir: Path, project_name: str, wiki_dir: str = "wiki-llm") -> None:
+    """Create wiki directory structure for LLM-native documentation."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    base = project_dir / wiki_dir
+
+    claude_md = """\
+# Wiki-LLM — Claude Code 유지보수 지침
+
+이 디렉토리는 **{project}** 프로젝트의 LLM-native 지식 베이스다.
+Andrej Karpathy의 wiki-llm 개념을 따른다: RAG가 아닌 **지속적으로 누적되는 구조화 문서**.
+
+---
+
+## 디렉토리 구조
+
+```
+{wiki_dir}/
+├── CLAUDE.md          ← 이 파일: 유지보수 규칙
+├── schema/SCHEMA.md   ← 위키 규약 전체 정의
+├── raw/               ← 불변 원본 자료 (LLM이 쓰지 않음)
+│   ├── 01-requirements/   # 요구사항 원문
+│   └── 02-decisions/      # 아키텍처 결정 기록 (ADR)
+└── wiki/              ← LLM이 유지보수하는 지식 페이지
+    ├── index.md           # 전체 페이지 카탈로그
+    ├── log.md             # 위키 변경 이력
+    ├── domain/            # 도메인 개념·용어 정의
+    └── feature/           # 기능별 상세 명세
+```
+
+---
+
+## Claude Code가 해야 할 일
+
+### 언제 wiki를 업데이트하나
+
+- 새로운 기능을 구현했을 때 → `wiki/feature/` 해당 파일 추가·수정
+- 도메인 개념이 바뀌거나 추가됐을 때 → `wiki/domain/glossary.md` 수정
+- 아키텍처 결정이 내려졌을 때 → `raw/02-decisions/` 에 ADR 추가
+- 기존 문서가 코드와 어긋날 때 → 코드 기준으로 wiki 수정
+
+### 언제 raw를 건드리나
+
+- 절대 수정하지 않는다. raw는 원본 기록이다.
+- 새 요구사항이나 결정이 생기면 파일을 새로 추가한다 (파일명: `<topic>-YYYYMMDD.md`).
+
+### 링크 규약
+
+- 같은 wiki 내 참조: `[[glossary]]`, `[[auto-scaling]]`
+- raw 참조: `[원본](../raw/02-decisions/example-20260101.md)`
+- 외부 코드 참조: `파일명:줄번호` (행 번호 포함)
+
+### 업데이트 후 반드시 할 일
+
+1. `wiki/index.md` 카탈로그 최신화
+2. `wiki/log.md` 맨 위에 변경 항목 한 줄 추가
+
+---
+
+## 작성 스타일
+
+- 독자는 이 프로젝트를 처음 보는 Claude (또는 신규 개발자)
+- 결론부터, 그 다음 이유
+- 코드 예시는 실제 코드 기준, 추측 금지
+- 테이블 > 긴 산문
+- 섹션당 200자 이내 권장
+""".replace("{project}", project_name).replace("{wiki_dir}", wiki_dir)
+
+    schema_md = """\
+# Wiki 규약 (SCHEMA)
+
+## 파일 명명
+
+| 위치 | 규칙 | 예시 |
+|------|------|------|
+| `raw/` | `<topic>-YYYYMMDD.md` | `init-20260101.md` |
+| `wiki/domain/` | 개념명 kebab-case | `glossary.md` |
+| `wiki/feature/` | 기능명 kebab-case | `auto-scaling.md` |
+
+## 페이지 프론트매터
+
+```markdown
+> 최종 수정: YYYY-MM-DD | 상태: draft / stable / deprecated
+```
+
+상태 정의:
+- `draft` — 작성 중, 코드와 불일치 가능
+- `stable` — 코드와 일치 확인됨
+- `deprecated` — 제거된 기능, 역사 기록용
+
+## 링크
+
+- wiki 내부: `[[페이지명]]` (파일 확장자 제외)
+- raw 원본: 상대 경로 마크다운 링크
+- 코드 위치: `파일:줄번호` 형식
+
+## index.md 항목 형식
+
+```
+- [페이지 제목](경로) — 한 줄 요약
+```
+
+## log.md 항목 형식
+
+```
+- YYYY-MM-DD: <변경 내용> (`파일명`)
+```
+"""
+
+    index_md = f"""\
+> 최종 수정: {today} | 상태: stable
+
+# {project_name} 위키 카탈로그
+
+## Domain
+- [Glossary](domain/glossary.md) — 핵심 용어 정의
+
+## Feature
+(추가 예정)
+"""
+
+    log_md = f"""\
+# 위키 변경 이력
+
+- {today}: 위키 초기 생성
+"""
+
+    glossary_md = f"""\
+> 최종 수정: {today} | 상태: draft
+
+# 용어 사전
+
+| 용어 | 정의 |
+|------|------|
+| (추가 예정) | |
+"""
+
+    files = {
+        base / "CLAUDE.md": claude_md,
+        base / "schema" / "SCHEMA.md": schema_md,
+        base / "wiki" / "index.md": index_md,
+        base / "wiki" / "log.md": log_md,
+        base / "wiki" / "domain" / "glossary.md": glossary_md,
+    }
+    dirs = [
+        base / "raw" / "01-requirements",
+        base / "raw" / "02-decisions",
+        base / "wiki" / "feature",
+    ]
+
+    for d in dirs:
+        ensure_dir(d)
+    for path, content in files.items():
+        if not path.exists():
+            write_text(path, content)
 
 
 def cmd_wizard(project_dir: Path) -> None:
@@ -502,7 +782,7 @@ def cmd_wizard(project_dir: Path) -> None:
     print(f"  프로젝트 디렉토리: {project_dir}\n")
 
     # ── Step 1: Doctor ───────────────────────────────────────────
-    print("[1/5] 환경 점검")
+    print("[1/7] 환경 점검")
     run_doctor = _confirm("  환경 점검을 실행할까요?", default=True)
     if run_doctor:
         ok = (cmd_doctor(project_dir) == 0)
@@ -514,7 +794,7 @@ def cmd_wizard(project_dir: Path) -> None:
     print()
 
     # ── Step 2: Project name ────────────────────────────────────
-    print("[2/5] 프로젝트 설정")
+    print("[2/7] 프로젝트 설정")
     config_path = project_dir / ".ai-config.yaml"
     default_name = project_dir.name
     project_name = _ask("  프로젝트명", default=default_name)
@@ -548,7 +828,7 @@ def cmd_wizard(project_dir: Path) -> None:
     print()
 
     # ── Step 3: Claude settings ─────────────────────────────────
-    print("[3/5] Claude 설정")
+    print("[3/7] Claude 설정")
     setup_claude_settings(project_dir)
     print(f"  .claude/settings.json {'생성됨' if not (project_dir / '.claude' / 'settings.json').exists() else '이미 존재'}")
     setup_claude_md(project_dir, cfg)
@@ -559,7 +839,7 @@ def cmd_wizard(project_dir: Path) -> None:
     print()
 
     # ── Step 4: Skills ──────────────────────────────────────────
-    print("[4/5] 스킬 설치")
+    print("[4/7] 스킬 설치")
     install = _confirm("  reflect / blueprint / deep-dive 스킬을 ~/.claude/skills/ 에 설치할까요?", default=True)
     if install:
         installed = install_skills()
@@ -569,8 +849,35 @@ def cmd_wizard(project_dir: Path) -> None:
             print("  모든 스킬이 이미 설치되어 있습니다")
     print()
 
-    # ── Step 5: Env vars ────────────────────────────────────────
-    print("[5/5] 환경 변수")
+    # ── Step 5: Wiki-LLM ────────────────────────────────────────
+    print("[5/7] 문서 관리 (LLM Wiki)")
+    print("  LLM-native 위키 구조를 생성합니다.")
+    print("  에이전트가 기능 구현 후 자동으로 wiki를 업데이트합니다.")
+    wiki_install = _confirm("  LLM wiki 문서 구조를 초기화할까요?", default=True)
+    if wiki_install:
+        wiki_dir_name = _ask("  wiki 디렉토리명", default="wiki-llm")
+        wiki_dir_path = project_dir / wiki_dir_name
+        if wiki_dir_path.exists():
+            print(f"  이미 {wiki_dir_name}/ 디렉토리가 존재합니다")
+        else:
+            setup_wiki_llm(project_dir, cfg.project, wiki_dir_name)
+            print(f"  {wiki_dir_name}/ 생성 완료")
+        _set_config_flag(config_path, "docs", "wiki_llm", "true")
+        _set_config_flag(config_path, "docs", "wiki_dir", wiki_dir_name)
+    print()
+
+    # ── Step 6: Commit hook ──────────────────────────────────────
+    print("[6/7] 세션 자동 커밋 훅")
+    print("  Claude Code 세션 종료 시 변경사항을 자동으로 WIP 커밋합니다.")
+    print("  teamstart 에이전트가 실행 중이면 AI가 커밋 메시지를 생성합니다.")
+    hook_install = _confirm("  commit-session.sh Stop 훅을 설치할까요?", default=False)
+    if hook_install:
+        ok = install_commit_hook(project_dir)
+        print("  훅 설치됨 (.claude/hooks/commit-session.sh)" if ok else "  이미 설치되어 있습니다")
+    print()
+
+    # ── Step 7: Env vars ────────────────────────────────────────
+    print("[7/7] 환경 변수")
     print("  런타임 동작을 조정하려면 아래 환경변수를 .env 또는 셸 프로파일에 추가하세요:\n")
     print("    AI_WATCH_INTERVAL=5        # watcher 폴링 간격 (초)")
     print("    AI_IDLE_TTL_SECONDS=120    # idle 에이전트 종료까지 대기 시간 (초)")
@@ -1444,6 +1751,39 @@ def write_task_artifact(
             f"- parent_task_id: {task.get('parent_task_id')}",
         ]
     lines += ["", "## Summary", "", note.strip() or "No summary provided.", ""]
+
+    if task:
+        mape_k = task.get("mape_k", {})
+        if mape_k:
+            lines += ["", "## MAPE-K", "", "| Stage | At | Notes |", "|-------|-----|-------|"]
+            for stage in ("monitor", "analyze", "plan", "execute", "verify", "knowledge"):
+                for entry in mape_k.get(stage, []):
+                    at = entry.get("at", "")
+                    notes = str({k: v for k, v in entry.items() if k != "at"})[:120]
+                    lines.append(f"| {stage} | {at} | {notes} |")
+            lines.append("")
+
+        impact = task.get("impact", {})
+        if impact:
+            lines += [
+                "## Impact",
+                "",
+                f"- Changed files: {impact.get('changed_files', 'n/a')}",
+                f"- Diff stat: {(impact.get('diff_stat') or '').splitlines()[0] if impact.get('diff_stat') else 'n/a'}",
+                f"- Duration: {impact.get('duration_secs', 0)}s",
+                "",
+            ]
+
+        review = task.get("review", {})
+        if review:
+            lines += [
+                "## Review",
+                "",
+                f"- Status: {review.get('status', 'none')}",
+                f"- Attempts: {review.get('attempts', 0)}",
+                "",
+            ]
+
     write_text(artifact_path, "\n".join(lines))
     return artifact_path
 
@@ -1473,10 +1813,17 @@ def enqueue_followup_tasks(project_dir: Path, cfg: Config, tasks: dict[str, Any]
                 )
         if policy.get("auto_docs") and "docs-writer" in configured_roles:
             if not open_followup_exists(tasks, task["id"], "docs-writer", "auto_docs"):
+                docs_task_text = f"Update docs for completed implementation: {title}"
+                if cfg.docs.get("wiki_llm"):
+                    wiki_dir = cfg.docs.get("wiki_dir", "wiki-llm")
+                    docs_task_text += (
+                        f"\n완료 후 {wiki_dir}/wiki/ 해당 feature 페이지를 업데이트하고"
+                        f" index.md/log.md를 갱신하라. 포맷은 {wiki_dir}/CLAUDE.md 규칙을 따른다."
+                    )
                 create_task(
                     project_dir,
                     "docs-writer",
-                    f"Update docs for completed implementation: {title}",
+                    docs_task_text,
                     created_by="system",
                     priority=task.get("priority", "normal"),
                     scope="docs",
@@ -1689,6 +2036,7 @@ def setup(repo_root: Path, project_dir: Path) -> None:
         "templates": repo_root / "templates",
         "skills": repo_root / "runtime" / "skills",
         "workflows": repo_root / "runtime" / "workflows",
+        "hooks": repo_root / "runtime" / "hooks",
     }
     for dest_name, src_dir in copy_dirs.items():
         if not src_dir.exists():
@@ -1969,88 +2317,481 @@ def watch(project_dir: Path) -> None:
         time.sleep(poll_seconds)
 
 
-def run_agent(project_dir: Path, role: str, agent_name: str, task_id: str | None) -> int:
-    cfg = ensure_project(project_dir)
-    tasks, pool = load_state(project_dir, cfg)
-    prompt = merge_prompt(project_dir, role)
-    task: dict[str, Any] | None = None
+# ---------------------------------------------------------------------------
+# MAPE-K scaffolding
+# ---------------------------------------------------------------------------
 
-    if task_id:
-        for item in tasks["tasks"]:
-            if item["id"] == task_id:
-                task = item
-                break
-        if task is None:
-            raise SystemExit(f"Task not found: {task_id}")
-        if task.get("status") == "pending":
-            task["status"] = "running"
-            task["agent"] = agent_name
-            task["started_at"] = now_iso()
-            task["updated_at"] = now_iso()
-            task["attempts"] = int(task.get("attempts", 0)) + 1
-            save_state(project_dir, cfg, tasks, pool)
+def mape_k_init(task: dict[str, Any]) -> None:
+    task.setdefault("mape_k", {"monitor": [], "analyze": [], "plan": [], "execute": [], "verify": [], "knowledge": []})
+    task.setdefault("impact", {})
+    task.setdefault("review", {"status": "none", "attempts": 0})
+    task.setdefault("verify_attempts", 0)
+    task.setdefault("review_attempts", 0)
 
-    payload_lines = [
-        f"Role: {role}",
-        f"Agent: {agent_name}",
-        f"Project: {cfg.project}",
-    ]
-    if task:
-        payload_lines.append(f"Task ID: {task['id']}")
-        payload_lines.append(f"Task: {task['title']}")
 
-    prompt_file = project_dir / ".ai-state" / f"{agent_name}.prompt.txt"
-    write_text(prompt_file, prompt + "\n\n" + "\n".join(payload_lines) + "\n")
+def mape_k_record(task: dict[str, Any], stage: str, payload: dict[str, Any]) -> None:
+    entry = {"at": now_iso(), **payload}
+    task.setdefault("mape_k", {}).setdefault(stage, []).append(entry)
 
-    print(f"[{agent_name}] starting role={role}")
-    if task:
-        print(f"[{agent_name}] task={task['title']}")
-    print(f"[{agent_name}] prompt file={prompt_file}")
 
-    exit_code = 0
-    summary_note = "Prompt prepared but no worker session was launched."
-    if claude_available(project_dir):
-        initial_prompt = "\n".join(payload_lines)
-        cmd = [
-            "claude",
-            "--dangerously-skip-permissions",
-            "--append-system-prompt",
-            prompt,
-            "-n",
-            agent_name,
-            initial_prompt,
-        ]
-        exit_code = subprocess.run(cmd, cwd=project_dir).returncode
-        summary_note = "Worker session finished. Review the terminal transcript for the full interaction."
+# ---------------------------------------------------------------------------
+# Impact loop helpers
+# ---------------------------------------------------------------------------
+
+def _run_git(project_dir: Path, args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_dir)] + args,
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def capture_pre_snapshot(project_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
+    head = _run_git(project_dir, ["rev-parse", "HEAD"])
+    dirty = _run_git(project_dir, ["status", "--porcelain"])
+    snap = {"head": head, "dirty_files": len([ln for ln in dirty.splitlines() if ln.strip()]), "at": now_iso()}
+    task.setdefault("impact", {})["pre"] = snap
+    return snap
+
+
+def capture_post_snapshot(project_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
+    head = _run_git(project_dir, ["rev-parse", "HEAD"])
+    dirty = _run_git(project_dir, ["status", "--porcelain"])
+    snap = {"head": head, "dirty_files": len([ln for ln in dirty.splitlines() if ln.strip()]), "at": now_iso()}
+    task.setdefault("impact", {})["post"] = snap
+    return snap
+
+
+def compute_impact(project_dir: Path, task: dict[str, Any], pre: dict[str, Any], post: dict[str, Any]) -> None:
+    diff_stat = _run_git(project_dir, ["diff", "--stat", pre.get("head", "HEAD~1"), post.get("head", "HEAD")])
+    changed_files = len([ln for ln in diff_stat.splitlines() if "|" in ln])
+    try:
+        from datetime import datetime
+        pre_dt = datetime.fromisoformat(pre["at"].replace("Z", "+00:00"))
+        post_dt = datetime.fromisoformat(post["at"].replace("Z", "+00:00"))
+        duration = int((post_dt - pre_dt).total_seconds())
+    except Exception:
+        duration = 0
+    task["impact"].update({"diff_stat": diff_stat, "changed_files": changed_files, "duration_secs": duration})
+
+
+# ---------------------------------------------------------------------------
+# Harness verification loop
+# ---------------------------------------------------------------------------
+
+def run_verification_gate(
+    project_dir: Path, cfg: Config, task: dict[str, Any], exit_code: int
+) -> tuple[str, str]:
+    if exit_code != 0:
+        return ("fail", f"worker exited with code {exit_code}")
+    verify_cfg = getattr(cfg, "verification", {}) or {}
+    if not isinstance(verify_cfg, dict):
+        verify_cfg = {}
+    cmd_str = verify_cfg.get("command", "")
+    if not cmd_str:
+        return ("skipped", "no verification command configured")
+    try:
+        r = subprocess.run(cmd_str, shell=True, cwd=project_dir, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            return ("pass", r.stdout.strip()[:500])
+        return ("fail", (r.stdout + r.stderr).strip()[:500])
+    except Exception as e:
+        return ("fail", str(e))
+
+
+def should_retry_harness(task: dict[str, Any], max_attempts: int) -> bool:
+    return int(task.get("verify_attempts", 0)) < max_attempts
+
+
+def mark_unverified(task: dict[str, Any], reason: str) -> None:
+    task["status"] = "unverified"
+    task["updated_at"] = now_iso()
+    task.setdefault("review", {})["status"] = "unverified"
+    task["review"]["reason"] = reason
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review gate
+# ---------------------------------------------------------------------------
+
+def enter_review_gate(
+    project_dir: Path, cfg: Config, tasks: dict[str, Any], task: dict[str, Any]
+) -> None:
+    task["status"] = "awaiting_review"
+    task["updated_at"] = now_iso()
+    task.setdefault("review", {})["status"] = "awaiting_review"
+    configured_roles = {str(item.get("name")) for item in cfg.agents}
+    if "reviewer" not in configured_roles:
+        return
+    if open_followup_exists(tasks, task["id"], "reviewer", "adversarial_review"):
+        return
+    create_task(
+        project_dir,
+        "reviewer",
+        f"[Adversarial Review] {task['title']}",
+        created_by="system",
+        priority=task.get("priority", "normal"),
+        scope="review",
+        paths=task.get("paths", []),
+        depends_on=[],
+        parent_task_id=task["id"],
+        root_task_id=task.get("root_task_id"),
+        policy={"auto_review": False, "auto_qa": False, "auto_docs": False},
+        metadata={"reason": "adversarial_review", "source_task_id": task["id"]},
+    )
+
+
+def parse_reviewer_verdict(artifact_path: Path) -> tuple[str, list[str]]:
+    if not artifact_path.exists():
+        return ("pending", ["artifact not found"])
+    text = read_text(artifact_path)
+    lower = text.lower()
+    if "## verdict: approved" in lower:
+        verdict = "approved"
+    elif "## verdict: rejected" in lower:
+        verdict = "rejected"
     else:
-        print("Claude CLI or .claude config not available. Prompt prepared but no agent was launched.")
+        verdict = "pending"
+    reasons: list[str] = []
+    for line in text.splitlines():
+        ls = line.strip()
+        if ls.startswith("- ") and verdict in ("rejected", "pending"):
+            reasons.append(ls[2:])
+    return (verdict, reasons[:10])
 
-    tasks, pool = load_state(project_dir, cfg)
-    if task_id:
-        task = task_by_id(tasks, task_id)
-        artifact_path = write_task_artifact(project_dir, cfg, task, agent_name, role, exit_code, prompt_file, summary_note)
-        if task is not None:
-            append_artifact(task, artifact_path)
-        finish_task(
-            tasks,
-            task_id,
-            role,
-            "failed" if exit_code else None,
-            result={
-                "exit_code": exit_code,
-                "artifact": str(artifact_path),
-                "finished_by": agent_name,
-                "error": None if exit_code == 0 else f"worker exited with code {exit_code}",
+
+def apply_review_verdict(
+    project_dir: Path,
+    cfg: Config,
+    tasks: dict[str, Any],
+    reviewer_task: dict[str, Any],
+    verdict: str,
+    reasons: list[str],
+) -> None:
+    source_task_id = reviewer_task.get("metadata", {}).get("source_task_id") or reviewer_task.get("parent_task_id")
+    source_task = task_by_id(tasks, source_task_id)
+
+    if verdict == "approved":
+        if source_task:
+            source_task["status"] = "done"
+            source_task["updated_at"] = now_iso()
+            source_task.setdefault("review", {})["status"] = "approved"
+        enqueue_followup_tasks(project_dir, cfg, tasks, source_task or reviewer_task)
+        return
+
+    review_attempts = int(reviewer_task.get("review_attempts", 0)) + 1
+    reviewer_task["review_attempts"] = review_attempts
+    max_rejections = int(os.environ.get("AI_REVIEW_MAX_REJECTIONS", "3"))
+
+    if source_task:
+        source_task.setdefault("review", {})["attempts"] = review_attempts
+        source_task["review"]["status"] = "rejected"
+        source_task["review"]["reasons"] = reasons
+
+    if review_attempts <= max_rejections:
+        src = source_task or reviewer_task
+        create_task(
+            project_dir,
+            src.get("role", "backend-coder"),
+            f"[Rework {review_attempts}/{max_rejections}] {src['title']}",
+            created_by="system",
+            priority="high",
+            scope="implementation",
+            paths=src.get("paths", []),
+            depends_on=[],
+            parent_task_id=source_task_id,
+            root_task_id=src.get("root_task_id"),
+            policy={"auto_review": False, "auto_qa": False, "auto_docs": False},
+            metadata={
+                "reason": "rework",
+                "source_task_id": source_task_id,
+                "rejection_reasons": reasons,
+                "review_attempt": review_attempts,
             },
         )
+    else:
+        if source_task:
+            source_task["status"] = "blocked"
+            source_task["updated_at"] = now_iso()
+        escalate_blocked(project_dir, source_task or reviewer_task)
+
+
+def escalate_blocked(project_dir: Path, task: dict[str, Any]) -> None:
+    task["status"] = "blocked"
+    task["updated_at"] = now_iso()
+    record_task_lesson(project_dir, task, "blocked")
+
+
+# ---------------------------------------------------------------------------
+# MAPE-K Analyze / Plan helpers
+# ---------------------------------------------------------------------------
+
+def analyze_task_context(tasks: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "attempts": int(task.get("attempts", 0)),
+        "verify_attempts": int(task.get("verify_attempts", 0)),
+        "review_attempts": int(task.get("review_attempts", 0)),
+        "rejection_reasons": task.get("review", {}).get("reasons", []),
+        "total_pending": sum(1 for t in tasks["tasks"] if t["status"] == "pending"),
+    }
+
+
+def plan_task_execution(
+    task: dict[str, Any], ctx: dict[str, Any], role: str, iteration: int
+) -> list[str]:
+    lines = [
+        f"Role: {role}",
+        f"Agent: {task.get('agent', 'unknown')}",
+        f"Task ID: {task['id']}",
+        f"Task: {task['title']}",
+    ]
+    if iteration > 1:
+        lines.append(f"Iteration: {iteration}")
+    if ctx.get("verify_attempts", 0) > 0:
+        lines.append(f"Verify attempts so far: {ctx['verify_attempts']}")
+    if ctx.get("rejection_reasons"):
+        lines.append("Rejection reasons from previous review:")
+        for r in ctx["rejection_reasons"]:
+            lines.append(f"  - {r}")
+    rework_meta = task.get("metadata", {})
+    if rework_meta.get("reason") == "rework" and rework_meta.get("rejection_reasons"):
+        lines.append("Required fixes (from reviewer):")
+        for r in rework_meta["rejection_reasons"]:
+            lines.append(f"  - {r}")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Knowledge: record lesson
+# ---------------------------------------------------------------------------
+
+def record_task_lesson(project_dir: Path, task: dict[str, Any], kind: str) -> None:
+    titles = {
+        "unverified": "Task failed harness verification",
+        "blocked": "Task blocked after max review rejections",
+        "rework": "Task required rework after review",
+    }
+    details = {
+        "unverified": f"Task '{task['title']}' (id={task['id']}) failed automated harness verification after max attempts.",
+        "blocked": f"Task '{task['title']}' (id={task['id']}) was blocked after exceeding max review rejections. Manual intervention required.",
+        "rework": f"Task '{task['title']}' (id={task['id']}) was sent back for rework. Check rejection reasons in task metadata.",
+    }
+    title = titles.get(kind, f"Task {kind}")
+    detail = details.get(kind, f"Task {task['id']} encountered {kind}")
+    try:
+        role = task.get("role", "unknown")
+        subprocess.run(
+            ["python3", str(runtime_home() / "lib" / "runtime.py"), "lesson",
+             "--project-dir", str(project_dir), "--role", role,
+             "--title", title, "--detail", detail],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def run_agent(project_dir: Path, role: str, agent_name: str, task_id: str | None) -> int:
+    """Run an agent in a continuation loop.
+
+    After each task the agent immediately claims the next pending task for the
+    same role (follow-ups included) without exiting the tmux window.  When no
+    task is available the agent polls up to AI_AGENT_IDLE_CHECKS times at
+    AI_AGENT_IDLE_POLL-second intervals before giving up and exiting.
+
+    Set AI_AGENT_LOOP=false to disable looping (single-task mode).
+    """
+    cfg = ensure_project(project_dir)
+    loop_enabled = os.environ.get("AI_AGENT_LOOP", "true").lower() != "false"
+    max_idle_checks = int(os.environ.get("AI_AGENT_IDLE_CHECKS", "6"))
+    idle_poll_secs = int(os.environ.get("AI_AGENT_IDLE_POLL", "5"))
+
+    idle_checks = 0
+    last_exit_code = 0
+    iteration = 0
+
+    while True:
+        iteration += 1
+        tasks, pool = load_state(project_dir, cfg)
+        task: dict[str, Any] | None = None
+
+        # --- locate or claim task ---
+        if task_id:
+            task = task_by_id(tasks, task_id)
+            if task is None:
+                print(f"[{agent_name}] task {task_id} not found — stopping")
+                break
+            if task.get("status") == "pending":
+                task["status"] = "running"
+                task["agent"] = agent_name
+                task["started_at"] = now_iso()
+                task["updated_at"] = now_iso()
+                task["attempts"] = int(task.get("attempts", 0)) + 1
+                save_state(project_dir, cfg, tasks, pool)
+        else:
+            task = claim_task(tasks, role)
+            if task is not None:
+                task["agent"] = agent_name
+                task["updated_at"] = now_iso()
+                save_state(project_dir, cfg, tasks, pool)
+
+        # --- no task available: idle-poll or exit ---
+        if task is None:
+            if not loop_enabled:
+                break
+            idle_checks += 1
+            if idle_checks > max_idle_checks:
+                print(f"[{agent_name}] no tasks after {max_idle_checks} checks — stopping")
+                break
+            print(f"[{agent_name}] idle {idle_checks}/{max_idle_checks}, next check in {idle_poll_secs}s")
+            time.sleep(idle_poll_secs)
+            task_id = None
+            continue
+
+        idle_checks = 0
+        current_task_id = task["id"]
+        max_harness = int(os.environ.get("AI_HARNESS_MAX_ATTEMPTS", "3"))
+        enforce_review = bool(getattr(cfg, "review", {}) and (cfg.review if isinstance(getattr(cfg, "review", None), dict) else {}).get("enforce", False))  # type: ignore[attr-defined]
+
+        # [M] Monitor
+        mape_k_init(task)
+        pre = capture_pre_snapshot(project_dir, task)
+        mape_k_record(task, "monitor", {"pre_head": pre.get("head", ""), "dirty_files": pre.get("dirty_files", 0)})
         save_state(project_dir, cfg, tasks, pool)
-        task = task_by_id(tasks, task_id)
-        if task is not None and exit_code == 0:
-            enqueue_followup_tasks(project_dir, cfg, tasks, task)
+
+        # [A] Analyze
+        ctx = analyze_task_context(tasks, task)
+        mape_k_record(task, "analyze", ctx)
+
+        # [P→E→V] Harness loop
+        prompt = merge_prompt(project_dir, role)
+        prompt_file = project_dir / ".ai-state" / f"{agent_name}.prompt.txt"
+        exit_code = 0
+        summary_note = "Prompt prepared but no worker session was launched."
+        verdict: str = "skipped"
+        verify_details: str = ""
+
+        while should_retry_harness(task, max_harness):
+            task["verify_attempts"] = int(task.get("verify_attempts", 0)) + 1
+            payload_lines = plan_task_execution(task, ctx, role, iteration)
+            payload_lines_full = [f"Project: {cfg.project}"] + payload_lines
+            write_text(prompt_file, prompt + "\n\n" + "\n".join(payload_lines_full) + "\n")
+            mape_k_record(task, "plan", {"payload_lines": len(payload_lines_full), "verify_attempts": task["verify_attempts"]})
+            save_state(project_dir, cfg, tasks, pool)
+
+            print(f"[{agent_name}] starting role={role} iter={iteration} verify_attempt={task['verify_attempts']}")
+            print(f"[{agent_name}] task={task['title']}")
+
+            if claude_available(project_dir):
+                cmd = [
+                    "claude",
+                    "--dangerously-skip-permissions",
+                    "--append-system-prompt",
+                    prompt,
+                    "-n",
+                    agent_name,
+                    "\n".join(payload_lines_full),
+                ]
+                exit_code = subprocess.run(cmd, cwd=project_dir).returncode
+                summary_note = "Worker session finished. Review the terminal transcript for the full interaction."
+            else:
+                print("Claude CLI or .claude config not available. Prompt prepared but no agent was launched.")
+
+            mape_k_record(task, "execute", {"exit_code": exit_code})
+
+            # reload task state after claude run
             tasks, pool = load_state(project_dir, cfg)
+            task = task_by_id(tasks, current_task_id)
+            if task is None:
+                break
+
+            verdict, verify_details = run_verification_gate(project_dir, cfg, task, exit_code)
+            mape_k_record(task, "verify", {"verdict": verdict, "details": verify_details[:200]})
+            save_state(project_dir, cfg, tasks, pool)
+
+            if verdict in ("pass", "skipped"):
+                break
+
+        last_exit_code = exit_code
+
+        # [I] Impact
+        tasks, pool = load_state(project_dir, cfg)
+        task = task_by_id(tasks, current_task_id)
+        if task is not None:
+            post = capture_post_snapshot(project_dir, task)
+            pre_snap = task.get("impact", {}).get("pre", pre)
+            compute_impact(project_dir, task, pre_snap, post)
+
+        # [K] artifact
+        artifact_path = write_task_artifact(
+            project_dir, cfg, task, agent_name, role, exit_code, prompt_file, summary_note
+        )
+        if task is not None:
+            append_artifact(task, artifact_path)
+
+        # Verdict branching
+        if verdict == "fail":
+            if task is not None:
+                mark_unverified(task, "harness_fail_exceeded")
+                record_task_lesson(project_dir, task, "unverified")
+            finish_task(tasks, current_task_id, role, "unverified",
+                result={"exit_code": exit_code, "artifact": str(artifact_path), "finished_by": agent_name,
+                        "error": f"verification failed: {verify_details[:200]}"})
+        elif role.endswith("-coder") or role == "coder":
+            finish_task(tasks, current_task_id, role, None,
+                result={"exit_code": exit_code, "artifact": str(artifact_path), "finished_by": agent_name,
+                        "error": None if exit_code == 0 else f"worker exited with code {exit_code}"})
+            save_state(project_dir, cfg, tasks, pool)
+            task = task_by_id(tasks, current_task_id)
+            if task is not None and (enforce_review or task.get("policy", {}).get("enforce_review")):
+                enter_review_gate(project_dir, cfg, tasks, task)
+            elif task is not None and exit_code == 0:
+                enqueue_followup_tasks(project_dir, cfg, tasks, task)
+        elif role == "reviewer":
+            v, reasons = parse_reviewer_verdict(artifact_path)
+            finish_task(tasks, current_task_id, role, "reviewed",
+                result={"exit_code": exit_code, "artifact": str(artifact_path), "finished_by": agent_name,
+                        "verdict": v, "error": None})
+            save_state(project_dir, cfg, tasks, pool)
+            tasks, pool = load_state(project_dir, cfg)
+            task = task_by_id(tasks, current_task_id)
+            if task is not None:
+                apply_review_verdict(project_dir, cfg, tasks, task, v, reasons)
+        else:
+            finish_task(tasks, current_task_id, role, None,
+                result={"exit_code": exit_code, "artifact": str(artifact_path), "finished_by": agent_name,
+                        "error": None if exit_code == 0 else f"worker exited with code {exit_code}"})
+            if exit_code == 0:
+                task = task_by_id(tasks, current_task_id)
+                if task is not None:
+                    enqueue_followup_tasks(project_dir, cfg, tasks, task)
+
+        if task is not None:
+            mape_k_record(task, "knowledge", {"artifact": str(artifact_path)})
+        save_state(project_dir, cfg, tasks, pool)
+        tasks, pool = load_state(project_dir, cfg)
+
+        if not loop_enabled:
+            break
+
+        # --- mark idle in pool so watcher tracks correctly, then loop ---
+        tasks, pool = load_state(project_dir, cfg)
+        for agent in pool["agents"]:
+            if agent["name"] == agent_name:
+                agent["status"] = "idle"
+                agent["task_id"] = None
+                agent["idle_since"] = now_iso()
+        save_state(project_dir, cfg, tasks, pool)
+
+        task_id = None  # claim next task on next iteration
+
+    # --- exit: remove from pool ---
+    tasks, pool = load_state(project_dir, cfg)
     remove_agent(pool, agent_name)
     save_state(project_dir, cfg, tasks, pool)
-    return exit_code
+    return last_exit_code
 
 
 def cmd_help() -> None:
@@ -2062,7 +2803,9 @@ def cmd_help() -> None:
             "  teamstart [project-dir]      Start (첫 실행 시 자동으로 마법사 실행)",
             "  teamstart wizard             설정 마법사 수동 실행",
             "  teamstart update             최신 변경사항 pull 및 런타임 갱신",
-            "  teamstart update --sync-config  위에 더해 .ai-config.yaml 누락 역할/섹션 동기화",
+            "  teamstart update --sync-config   위에 더해 .ai-config.yaml 누락 역할/섹션 동기화",
+            "  teamstart update --install-hook  세션 종료 시 자동 커밋 훅 설치",
+            "  teamstart update --remove-hook   자동 커밋 훅 제거",
             "  teamstart doctor             환경 및 프로젝트 설정 점검",
             "  teamstart help               도움말 표시",
             "",
@@ -2089,6 +2832,11 @@ def cmd_help() -> None:
             "  TMUX_BIN              Use a custom tmux binary (default: tmux)",
             "  AI_WATCH_INTERVAL     Watcher polling interval in seconds (default: 5)",
             "  AI_IDLE_TTL_SECONDS   Seconds before idle worker pane is closed (default: 120)",
+            "  AI_AGENT_LOOP              Agent task continuation loop, true/false (default: true)",
+            "  AI_AGENT_IDLE_CHECKS       Max idle polls before agent exits (default: 6)",
+            "  AI_AGENT_IDLE_POLL         Seconds between idle polls (default: 5)",
+            "  AI_HARNESS_MAX_ATTEMPTS    Max harness verify retries per task (default: 3)",
+            "  AI_REVIEW_MAX_REJECTIONS   Max adversarial review rejections before blocked (default: 3)",
             "",
             "Docs: https://github.com/picory/tmux-team-agent",
         ])
@@ -2204,8 +2952,24 @@ def sync_config(project_dir: Path) -> list[str]:
     return changes
 
 
-def cmd_update(project_dir: Path, sync_config_flag: bool = False) -> int:
+def cmd_update(
+    project_dir: Path,
+    sync_config_flag: bool = False,
+    install_hook_flag: bool = False,
+    remove_hook_flag: bool = False,
+) -> int:
     """Pull latest changes from the repo and re-run setup."""
+    # Hook-only operations don't need git pull
+    if install_hook_flag and not remove_hook_flag:
+        ok = install_commit_hook(project_dir)
+        print("commit-session hook installed." if ok else "commit-session hook already installed.")
+        return 0
+
+    if remove_hook_flag:
+        ok = remove_commit_hook(project_dir)
+        print("commit-session hook removed." if ok else "commit-session hook was not installed.")
+        return 0
+
     # runtime.py is symlinked: resolve() gives <repo>/runtime/lib/runtime.py
     resolved = Path(__file__).resolve()
     repo_root = resolved.parents[2]
@@ -2290,6 +3054,9 @@ def cmd_doctor(project_dir: Path | None) -> int:
     tmux_bin_env = os.environ.get("TMUX_BIN", "tmux (default)")
     print(f"  AI_WATCH_INTERVAL     = {watch_interval}")
     print(f"  AI_IDLE_TTL_SECONDS   = {idle_ttl}")
+    print(f"  AI_AGENT_LOOP         = {os.environ.get('AI_AGENT_LOOP', 'true (default)')}")
+    print(f"  AI_AGENT_IDLE_CHECKS  = {os.environ.get('AI_AGENT_IDLE_CHECKS', '6 (default)')}")
+    print(f"  AI_AGENT_IDLE_POLL    = {os.environ.get('AI_AGENT_IDLE_POLL', '5 (default)')}")
     print(f"  TMUX_BIN              = {tmux_bin_env}")
     print(f"  TMUX_RUNTIME_HOME     = {os.environ.get('TMUX_RUNTIME_HOME', f'{rt_home} (default)')}")
 
@@ -2406,6 +3173,10 @@ def main() -> int:
     update_parser.add_argument("--project-dir", default=None)
     update_parser.add_argument("--sync-config", action="store_true",
                                help="merge template config into existing .ai-config.yaml")
+    update_parser.add_argument("--install-hook", action="store_true",
+                               help="install commit-session.sh Stop hook into this project")
+    update_parser.add_argument("--remove-hook", action="store_true",
+                               help="remove commit-session.sh Stop hook from this project")
 
     wizard_parser = sub.add_parser("wizard")
     wizard_parser.add_argument("--project-dir", default=None)
@@ -2483,7 +3254,12 @@ def main() -> int:
         return 0
     if args.command == "update":
         project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
-        return cmd_update(project_dir, sync_config_flag=args.sync_config)
+        return cmd_update(
+            project_dir,
+            sync_config_flag=args.sync_config,
+            install_hook_flag=args.install_hook,
+            remove_hook_flag=args.remove_hook,
+        )
     if args.command == "wizard":
         project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd()
         cmd_wizard(project_dir)

@@ -134,5 +134,15 @@ paths:
   tasks: ./tasks
   outputs: ./outputs
 
+docs:
+  wiki_llm: false      # LLM-native wiki 사용 여부 (wizard에서 활성화)
+  wiki_dir: wiki-llm   # wiki 루트 디렉토리
+
 # limits:
 #   min_free_memory_mb: 2048   # hold off new agent spawns when free RAM drops below this
+
+verification:
+  command: ""   # 검수 명령 (예: pytest -q). 빈 값이면 skip
+
+review:
+  enforce: false  # true면 모든 coder 태스크에 적대적 리뷰 게이트 강제
